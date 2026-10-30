@@ -65,7 +65,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: .9rem; color
 .panel-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
 .panel h2 { margin: 0; font-size: 1.1rem; }
 .filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: end; }
-.filters #f-q { grid-column: span 2; }
+.filters #f-q { grid-column: span 1; }
 .city small { display: block; color: var(--muted); font-size: .78rem; margin-top: 2px; }
 .range { flex-direction: column; }
 .range input { padding: 0; accent-color: var(--primary); }
@@ -129,6 +129,30 @@ legend { color: var(--muted); font-size: .85rem; padding: 0 6px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: var(--primary);
   border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; margin-right: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.head-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.btn.small { padding: 6px 12px; font-size: .85rem; }
+#enrich-status { margin-bottom: 12px; }
+.email-cell { display: flex; align-items: center; gap: 4px; max-width: 260px; }
+a.mail { color: var(--cold); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.mail:hover { text-decoration: underline; }
+.icon-btn { background: transparent; border: 1px solid transparent; color: var(--muted); border-radius: 6px; cursor: pointer;
+  padding: 2px 6px; font-size: .9rem; line-height: 1; }
+.icon-btn:hover { color: var(--text); border-color: var(--line); }
+.ebadge { display: inline-block; font-size: .7rem; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); margin-top: 3px; }
+.ebadge.ok { color: var(--ok); border-color: rgba(61,220,151,.4); }
+.ebadge.manual { color: var(--cold); border-color: rgba(79,195,247,.4); }
+.ebadge.warn { color: var(--warm); border-color: rgba(255,181,71,.4); }
+.email-list { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 6px; }
+.email-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.email-list .ebadge { margin-top: 0; }
+.email-list .src { font-size: .8rem; }
+.email-edit { display: flex; gap: 8px; flex-wrap: wrap; }
+.email-edit input { flex: 1 1 240px; }
+.m-email { display: none !important; }
+@media (max-width: 640px) {
+  .m-email { display: flex !important; align-items: center; gap: 2px; max-width: 220px; }
+}
 
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line);
   padding: 12px 18px; border-radius: 12px; z-index: 100; box-shadow: 0 10px 30px rgba(0,0,0,.4); }

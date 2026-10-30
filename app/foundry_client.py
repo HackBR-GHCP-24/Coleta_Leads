@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import config
+from . import config, emails
 from .config import SERVICES
 
 _openai = None
@@ -37,6 +37,8 @@ def build_prompt(bases: list[str], services: list[str], segment: str | None, qua
     else:
         parts.append("Distribua os leads em pelo menos 3 cidades diferentes dentro desse raio, incluindo cidades fora das bases.")
     parts.append("Para cada empresa informe base_proxima, distancia_km e tempo_viagem_h (estimativas por rodovia).")
+    parts.append("Busque no site oficial/página de contato os e-mails corporativos públicos e preencha contatos_email "
+                 "com a URL da fonte; nunca invente e-mails.")
     if services:
         names = ", ".join(f"{k} ({SERVICES.get(k, k)})" for k in services)
         parts.append(f"Priorize empresas com necessidade destes serviços: {names}.")
@@ -75,6 +77,10 @@ def parse_response(text: str, max_hours: float | None = None) -> dict:
         lead["cidade"] = (lead.get("cidade") or "").strip() or None
         lead["distancia_km"] = _num(lead.get("distancia_km"))
         lead["tempo_viagem_h"] = _num(lead.get("tempo_viagem_h"))
+        lead["contatos_email"] = emails.company_only(
+            emails.normalize(lead.get("contatos_email") or lead.get("emails") or lead.get("email")), lead.get("site"))
+        lead.pop("emails", None)
+        lead.pop("email", None)
     if max_hours:
         # tolerância de 15 min para as estimativas do modelo
         data["leads"] = [l for l in data["leads"] if l["tempo_viagem_h"] is None or l["tempo_viagem_h"] <= max_hours + 0.25]
@@ -121,3 +127,39 @@ def run_agent(bases: list[str], services: list[str], segment: str | None, quanti
     data["fontes_pesquisa"] = citations
     data["response_id"] = response.id
     return data
+
+
+def build_email_prompt(lead: dict) -> str:
+    site = lead.get("site") or (lead.get("detalhes") or {}).get("site") or "desconhecido"
+    return (
+        "TAREFA DE ENRIQUECIMENTO (não faça prospecção nova). Pesquise na web os e-mails corporativos públicos de "
+        f"contato da empresa \"{lead.get('empresa')}\" ({lead.get('cidade') or 's/ cidade'}), site: {site}. "
+        "Procure no site oficial (página de contato, rodapé, fale conosco, trabalhe conosco, política de privacidade) "
+        "e em perfis oficiais. Retorne SOMENTE JSON no formato "
+        '{"leads":[{"empresa":"...","contatos_email":[{"email":"...","fonte":"URL onde o e-mail aparece",'
+        '"tipo":"encontrado|inferido"}],"email_status":"ok|nao_encontrado","observacao":"..."}]}. '
+        "Use tipo \"encontrado\" apenas se o e-mail estiver publicado na URL citada. Se não achar, devolva lista "
+        "vazia e email_status \"nao_encontrado\". Nunca invente e-mails nem retorne e-mails pessoais de funcionários."
+    )
+
+
+def find_emails(lead: dict) -> dict:
+    """Pede ao agente apenas os e-mails de contato de um lead existente."""
+    response = _get_openai().responses.create(
+        input=build_email_prompt(lead),
+        extra_body={"agent_reference": {"name": config.FOUNDRY_AGENT_NAME, "type": "agent_reference"}},
+        timeout=180,
+    )
+    text = response.output_text or ""
+    contacts, status = [], "nao_encontrado"
+    try:
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.S)
+        data = json.loads(fenced.group(1) if fenced else text[text.find("{"): text.rfind("}") + 1])
+        item = (data.get("leads") or [data])[0] if isinstance(data, dict) else {}
+        contacts = emails.company_only(emails.normalize(item.get("contatos_email") or item.get("emails")),
+                                       lead.get("site") or (lead.get("detalhes") or {}).get("site"))
+        status = item.get("email_status") or status
+    except (ValueError, IndexError, AttributeError):
+        pass
+    status = "ok" if contacts else "nao_encontrado"
+    return {"contatos_email": contacts, "email_status": status}

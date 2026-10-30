@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import random
+import re
+import unicodedata
 
 from .config import BASES, SERVICES
 
@@ -54,6 +56,11 @@ _NECESSIDADES = {
 _CARGOS = ["Gerente de TI", "Diretor Administrativo-Financeiro", "Coordenador de Infraestrutura", "CEO / Sócio"]
 
 
+def _slug(nome: str) -> str:
+    base = unicodedata.normalize("NFKD", nome.replace("(exemplo)", "")).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")
+
+
 def _lead(rng: random.Random, cidade: str | None = None, servicos_foco: list[str] | None = None,
           segmento: str | None = None) -> dict:
     seg = segmento if segmento in _SEGMENTOS else rng.choice(list(_SEGMENTOS))
@@ -91,6 +98,7 @@ def _lead(rng: random.Random, cidade: str | None = None, servicos_foco: list[str
         "score_oportunidade": max(score, 20),
         "nivel_confianca": "baixa",
         "contato_sugerido": {"cargo": rng.choice(_CARGOS), "canal": "LinkedIn da empresa / site institucional"},
+        "contatos_email": [{"email": f"contato@{_slug(nome)}.example", "fonte": None, "tipo": "inferido"}],
         "fontes": [],
         "observacao": "Dado fictício gerado no modo demonstração.",
     }

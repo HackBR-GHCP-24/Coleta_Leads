@@ -48,6 +48,11 @@
         </select>
         <select id="f-servico"><option value="">Todos os serviços</option></select>
         <select id="f-status"><option value="">Todos os status</option></select>
+        <select id="f-email">
+          <option value="">Com ou sem e-mail</option>
+          <option value="true">Com e-mail</option>
+          <option value="false">Sem e-mail</option>
+        </select>
         <label class="range">Score mín. <b id="f-score-val">0</b>
           <input id="f-score" type="range" min="0" max="100" step="5" value="0" />
         </label>
@@ -56,12 +61,16 @@
       <div class="panel">
         <div class="panel-head">
           <h2>Ranking de oportunidades</h2>
-          <span id="count" class="muted"></span>
+          <div class="head-actions">
+            <span id="count" class="muted"></span>
+            <button id="btn-enrich" class="btn ghost small" title="Pede ao agente os e-mails dos leads que ainda não têm">✉ Buscar e-mails faltantes</button>
+          </div>
         </div>
+        <div id="enrich-status" class="collect-status hidden"></div>
         <div class="table-wrap">
           <table class="ranking">
             <thead><tr>
-              <th>#</th><th>Empresa</th><th>Cidade</th><th class="hide-sm">Segmento</th>
+              <th>#</th><th>Empresa</th><th>Cidade</th><th class="hide-sm">E-mail</th><th class="hide-sm">Segmento</th>
               <th class="hide-sm">Porte</th><th class="hide-md">Serviços</th><th>Score</th><th class="hide-sm">Status</th>
             </tr></thead>
             <tbody id="leads-body"></tbody>

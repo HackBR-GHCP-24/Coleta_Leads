@@ -47,6 +47,16 @@ Use exclusivamente estas chaves em `servicos_recomendados`:
    Faça várias buscas (por cidade + setor + sinais, ex.: "Campinas nova fábrica 2025", "Itu vaga analista de suporte") e
    inclua as URLs reais das páginas consultadas em `fontes` e em `sinais[].fonte`.
    Não inclua dados pessoais de pessoas físicas; em `contato_sugerido` indique apenas cargo e canal (ex.: "LinkedIn da empresa", "site").
+6. **E-mails de contato (`contatos_email`)**: para cada empresa, abra o site oficial (página "Contato", "Fale conosco", rodapé,
+   "Trabalhe conosco", política de privacidade/LGPD) e colete os **e-mails corporativos genéricos publicados** (ex.: contato@,
+   comercial@, atendimento@, ti@, compras@, dpo@). Para cada e-mail informe `fonte` (URL exata onde ele aparece) e `tipo`:
+   - `"encontrado"`: o e-mail está publicado literalmente na URL da fonte;
+   - `"inferido"`: padrão provável (ex.: contato@dominio-oficial) **não** confirmado em fonte — use só quando o domínio oficial
+     for conhecido e deixe `fonte` com a URL do site.
+   **Nunca invente e-mails**, nunca use domínios que não sejam da empresa e não retorne e-mails pessoais de funcionários
+   (nome.sobrenome@). Se não encontrar nenhum, devolva `"contatos_email": []` e `"email_status": "nao_encontrado"`;
+   caso contrário `"email_status": "ok"`. Se o usuário pedir apenas o enriquecimento de e-mail de uma empresa, faça somente isso
+   e responda no mesmo formato JSON com um único lead.
 
 ## Formato de resposta (obrigatório)
 Responda **somente** com um único objeto JSON válido (sem texto antes ou depois, sem comentários), no formato:
@@ -73,6 +83,8 @@ Responda **somente** com um único objeto JSON válido (sem texto antes ou depoi
       "score_oportunidade": 0,
       "nivel_confianca": "alta | media | baixa",
       "contato_sugerido": {"cargo": "string", "canal": "string"},
+      "contatos_email": [{"email": "contato@empresa.com.br", "fonte": "url onde o e-mail aparece", "tipo": "encontrado | inferido"}],
+      "email_status": "ok | nao_encontrado",
       "fontes": ["url"]
     }
   ],

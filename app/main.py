@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
@@ -9,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, mock_data
+from . import config, db, emails, mock_data
 from .auth import create_token, current_user
 
 log = logging.getLogger("coleta_leads")
@@ -33,7 +34,13 @@ class LoginIn(BaseModel):
 
 
 class StatusIn(BaseModel):
-    status: str
+    status: str | None = None
+    email: str | None = None  # "" remove os e-mails; valor substitui pelos informados manualmente
+
+
+class EnrichIn(BaseModel):
+    lead_ids: list[int] = Field(default_factory=list, max_length=30)  # vazio = leads sem e-mail
+    modo: str | None = None
 
 
 class CollectIn(BaseModel):
@@ -74,8 +81,8 @@ def meta(user: str = Depends(current_user)):
 @app.get("/api/leads")
 def leads(cidade: str | None = None, servico: str | None = None, min_score: int = 0, status: str | None = None,
           q: str | None = None, base: str | None = None, max_horas: float | None = None,
-          user: str = Depends(current_user)):
-    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas)
+          com_email: bool | None = None, user: str = Depends(current_user)):
+    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas, com_email)
 
 
 @app.get("/api/leads/{lead_id}")
@@ -88,10 +95,18 @@ def lead(lead_id: int, user: str = Depends(current_user)):
 
 @app.patch("/api/leads/{lead_id}")
 def update_lead(lead_id: int, body: StatusIn, user: str = Depends(current_user)):
-    if body.status not in db.STATUSES:
-        raise HTTPException(400, "Status inválido")
-    if not db.set_status(lead_id, body.status):
+    if not db.get_lead(lead_id):
         raise HTTPException(404, "Lead não encontrado")
+    if body.status is not None:
+        if body.status not in db.STATUSES:
+            raise HTTPException(400, "Status inválido")
+        db.set_status(lead_id, body.status)
+    if body.email is not None:
+        values = [e.strip() for e in body.email.replace(";", ",").split(",") if e.strip()]
+        bad = [e for e in values if not emails.valid(e)]
+        if bad:
+            raise HTTPException(400, f"E-mail inválido: {', '.join(bad)}")
+        db.set_contacts(lead_id, [{"email": e, "tipo": "manual"} for e in values], replace=True)
     return db.get_lead(lead_id)
 
 
@@ -143,6 +158,54 @@ def collect(body: CollectIn, tasks: BackgroundTasks, user: str = Depends(current
     db.create_job(job_id, body.model_dump())
     tasks.add_task(_run_collect, job_id, body)
     return {"job_id": job_id}
+
+
+def _mock_emails(lead: dict) -> dict:
+    """Modo demo: só sugere padrão inferido (.example) para leads fictícios; nunca para empresas reais."""
+    contacts = []
+    if lead.get("origem") == "demo":
+        contacts = [{"email": f"contato@{mock_data._slug(lead['empresa'])}.example", "fonte": None, "tipo": "inferido"}]
+    return {"contatos_email": contacts, "email_status": "ok" if contacts else "nao_encontrado"}
+
+
+def _run_enrich(job_id: str, ids: list[int], use_foundry: bool) -> None:
+    leads_ = db.leads_for_enrichment(ids or None)
+    feitos = achados = 0
+    try:
+        find = _mock_emails
+        if use_foundry:
+            from .foundry_client import find_emails as find
+
+        def work(lead_: dict) -> bool:
+            try:
+                res = find(lead_)
+            except Exception:  # noqa: BLE001
+                log.exception("Falha ao enriquecer lead %s", lead_["id"])
+                return False
+            db.set_contacts(lead_["id"], res["contatos_email"], status=res.get("email_status"))
+            return bool(res["contatos_email"])
+
+        db.job_progress(job_id, f"Buscando e-mails de {len(leads_)} lead(s)…")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for ok in pool.map(work, leads_):
+                feitos += 1
+                achados += ok
+                db.job_progress(job_id, f"Buscando e-mails… {feitos}/{len(leads_)} lead(s) processados, "
+                                        f"{achados} com e-mail.", achados)
+        db.finish_job(job_id, "concluido", "foundry" if use_foundry else "demo",
+                      f"E-mail encontrado para {achados} de {len(leads_)} lead(s).", 0, achados)
+    except Exception as exc:  # noqa: BLE001
+        db.finish_job(job_id, "erro", None, f"{type(exc).__name__}: {exc}"[:500])
+
+
+@app.post("/api/enrich")
+def enrich(body: EnrichIn, tasks: BackgroundTasks, user: str = Depends(current_user)):
+    """Busca (via agente) os e-mails de contato de leads existentes."""
+    use_foundry = body.modo != "mock" and config.foundry_enabled()
+    job_id = uuid.uuid4().hex
+    db.create_job(job_id, {"tipo": "enriquecer_email", **body.model_dump()})
+    tasks.add_task(_run_enrich, job_id, body.lead_ids, use_foundry)
+    return {"job_id": job_id, "total": len(body.lead_ids or db.leads_for_enrichment())}
 
 
 @app.get("/api/jobs/{job_id}")
