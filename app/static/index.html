@@ -28,6 +28,7 @@
       <div class="topbar-right">
         <span id="mode-badge" class="badge"></span>
         <span id="user-name" class="muted"></span>
+        <button id="btn-weights" class="btn ghost" title="Ajustar pesos do ranking">⚙ Pesos</button>
         <button id="btn-collect" class="btn primary">＋ Nova coleta</button>
         <button id="btn-logout" class="btn ghost" title="Sair">Sair</button>
       </div>
@@ -114,6 +115,23 @@
       <div class="actions">
         <button type="button" class="btn ghost" id="collect-cancel">Fechar</button>
         <button type="submit" class="btn primary" id="collect-submit">Iniciar coleta</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Pesos do ranking -->
+  <dialog id="weights-dialog">
+    <form id="weights-form" method="dialog" class="dialog-body">
+      <h2>Pesos do ranking</h2>
+      <p class="muted">O score final é a média ponderada dos fatores abaixo. A aderência soma o peso de cada serviço recomendado
+        para o lead (3 pontos = 100%). Ao salvar, o ranking é recalculado na hora, sem nova coleta.</p>
+      <fieldset><legend>Fatores do score</legend><div id="w-fatores" class="weights"></div></fieldset>
+      <fieldset><legend>Peso por serviço (aderência)</legend><div id="w-servicos" class="weights"></div></fieldset>
+      <div id="weights-status" class="collect-status hidden"></div>
+      <div class="actions">
+        <button type="button" class="btn ghost" id="weights-reset">Restaurar padrão</button>
+        <button type="button" class="btn ghost" id="weights-cancel">Fechar</button>
+        <button type="submit" class="btn primary" id="weights-save">Salvar e recalcular</button>
       </div>
     </form>
   </dialog>

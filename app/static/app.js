@@ -183,6 +183,8 @@ async function openLead(id) {
       <div class="fact"><span>CNPJ ${d.origem_dados?.cadastro === "verificado" ? vbadge("verificado", `Conferido na Receita (${d.cnpj_dados?.fonte || ""}); ${d.origem_dados?.cnpj === "manual" ? "informado manualmente" : "encontrado pelo agente"}`) : vbadge(d.origem_dados?.cnpj, d.origem_dados?.cnpj === "ia" ? "CNPJ informado pelo agente, ainda não conferido" : "CNPJ informado manualmente")}</span>${esc(d.cnpj || "—")}${d.cnpj_fonte && safeUrl(d.cnpj_fonte) ? ` <a class="muted" href="${esc(safeUrl(d.cnpj_fonte))}" target="_blank" rel="noopener">fonte</a>` : ""}</div>
       <div class="fact"><span>Contato sugerido</span>${esc(d.contato_sugerido?.cargo || "—")}<br><small class="muted">${esc(d.contato_sugerido?.canal || "")}</small></div>
     </div>
+    <h3>Por que este score? <span class="muted small-note">ajuste em ⚙ Pesos</span></h3>
+    ${scoreWhy(l.score_detalhe)}
     <h3>Dados cadastrais ${d.origem_dados?.cadastro ? vbadge(d.origem_dados.cadastro) : l.origem === "demo" ? "" : vbadge("ia", "Sem CNPJ verificado: porte e segmento são estimativas da IA")}</h3>
     ${cadastro(d, l)}
     <div class="email-edit">
@@ -267,6 +269,19 @@ function timeline(sinais) {
         ${u ? `<a class="muted src" href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}">${esc(new URL(u).hostname)}</a>` : `<small class="muted">sem fonte</small>`}
       </div></li>`;
   }).join("")}</ol>`;
+}
+
+function scoreWhy(b) {
+  if (!b) return "";
+  const rows = b.fatores.filter((f) => f.peso > 0).sort((x, y) => y.pontos - x.pontos).map((f) => `
+    <div class="why-row" title="${esc(f.label)}: valor ${Math.round(f.valor * 100)}% × peso ${f.peso_pct}% = ${f.pontos} pts">
+      <div class="why-label"><b>${esc(f.label)}</b><small class="muted">${esc(f.detalhe)}</small></div>
+      <div class="why-bar"><i style="width:${Math.round(f.valor * 100)}%"></i></div>
+      <div class="why-pts"><b>+${String(f.pontos).replace(".", ",")}</b><small class="muted">de ${String(f.peso_pct).replace(".", ",")}</small></div>
+    </div>`).join("");
+  const svcs = b.servicos.map((s) => `<span class="tag ${s.recomendado ? "on" : "off"}" title="${s.recomendado ? "Recomendado pelo agente" : "Não recomendado"} · peso ${s.peso}">${s.recomendado ? "✓" : "–"} ${esc(s.label)} ×${String(s.peso).replace(".", ",")}</span>`).join("");
+  return `<div class="why">${rows}<div class="why-total">Score final <b>${b.score}</b> = soma dos pontos</div>
+    <div class="tags why-svcs">${svcs}</div></div>`;
 }
 
 function locIa(d) {
@@ -390,3 +405,48 @@ $("#collect-form").addEventListener("submit", async (e) => {
 });
 
 boot();
+
+// ---------- Pesos do ranking ----------
+const wdlg = $("#weights-dialog");
+let wcfg = null;
+function renderWeights(p) {
+  const slider = (grupo, k, label, v) => {
+    const [lo, hi] = wcfg.limites[grupo];
+    const step = grupo === "fatores" ? 1 : 0.25;
+    return `<label class="wrow"><span>${esc(label)}</span>
+      <input type="range" data-g="${grupo}" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${v}" />
+      <b data-out="${grupo}.${k}"></b></label>`;
+  };
+  $("#w-fatores").innerHTML = Object.entries(wcfg.fatores).map(([k, l]) => slider("fatores", k, l, p.fatores[k])).join("");
+  $("#w-servicos").innerHTML = Object.entries(wcfg.servicos).map(([k, v]) => slider("servicos", k, v.label, p.servicos[k])).join("");
+  updateWeightLabels();
+}
+function readWeights() {
+  const out = { servicos: {}, fatores: {} };
+  wdlg.querySelectorAll("input[data-g]").forEach((i) => { out[i.dataset.g][i.dataset.k] = +i.value; });
+  return out;
+}
+function updateWeightLabels() {
+  const w = readWeights();
+  const tot = Object.values(w.fatores).reduce((a, b) => a + b, 0) || 1;
+  for (const [k, v] of Object.entries(w.fatores)) wdlg.querySelector(`[data-out="fatores.${k}"]`).textContent = `${Math.round(100 * v / tot)}%`;
+  for (const [k, v] of Object.entries(w.servicos)) wdlg.querySelector(`[data-out="servicos.${k}"]`).textContent = `×${String(v).replace(".", ",")}`;
+}
+wdlg.addEventListener("input", (e) => { if (e.target.dataset.g) updateWeightLabels(); });
+$("#btn-weights").addEventListener("click", async () => {
+  wcfg = await api("/api/config/pesos");
+  $("#weights-status").classList.add("hidden");
+  renderWeights(wcfg.pesos); wdlg.showModal();
+});
+$("#weights-cancel").addEventListener("click", () => wdlg.close());
+$("#weights-reset").addEventListener("click", () => renderWeights(wcfg.padrao));
+$("#weights-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const st = $("#weights-status"); st.classList.remove("hidden");
+  try {
+    const r = await api("/api/config/pesos", { method: "PUT", body: readWeights() });
+    wcfg = r;
+    st.textContent = `✅ Pesos salvos. ${r.recalculados} lead(s) recalculados, ${r.alterados} mudaram de score.`;
+    refresh();
+  } catch (err) { st.textContent = "❌ " + err.message; }
+});

@@ -6,7 +6,7 @@ import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from . import config, emails, sinais as sinais_mod
+from . import config, emails, scoring, sinais as sinais_mod
 from .auth import hash_password, verify_password
 from .scoring import final_score, tier, travel_hours
 
@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS sinais (
     UNIQUE (lead_id, chave)
 );
 CREATE INDEX IF NOT EXISTS ix_sinais_lead ON sinais(lead_id);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS api_cache (
     kind TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -90,6 +95,7 @@ def init_db() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
         _migrate(c)
+        _load_weights(c)
         _recompute(c)  # o decaimento dos sinais muda com o tempo
         if config.APP_PASSWORD:
             row = c.execute("SELECT password_hash FROM users WHERE username=?", (config.APP_USERNAME,)).fetchone()
@@ -153,6 +159,27 @@ def _rescore(c: sqlite3.Connection, lead_id: int, data: dict) -> int:
 def _recompute(c: sqlite3.Connection) -> None:
     for row in c.execute("SELECT id, data FROM leads").fetchall():
         _rescore(c, row["id"], json.loads(row["data"]))
+
+
+def _load_weights(c: sqlite3.Connection) -> None:
+    row = c.execute("SELECT value FROM settings WHERE key='pesos'").fetchone()
+    try:
+        scoring.set_weights(json.loads(row["value"]) if row else {})
+    except (ValueError, TypeError):
+        scoring.set_weights({})
+
+
+def save_weights(weights: dict) -> int:
+    """Valida, persiste os pesos e recalcula o score de todos os leads (sem nova coleta). Devolve quantos mudaram."""
+    valid = scoring.validate_weights(weights)
+    with conn() as c:
+        antes = dict(c.execute("SELECT id, score_final FROM leads").fetchall())
+        c.execute("INSERT OR REPLACE INTO settings(key, value, updated_at) VALUES ('pesos', ?, ?)",
+                  (json.dumps(valid), _now()))
+        scoring.set_weights(valid)
+        _recompute(c)
+        depois = dict(c.execute("SELECT id, score_final FROM leads").fetchall())
+    return sum(1 for k, v in depois.items() if antes.get(k) != v)
 
 
 def add_signals(lead_id: int, items) -> int:
@@ -245,6 +272,7 @@ def set_contacts(lead_id: int, contacts: list[dict], replace: bool = False, stat
         email, tipo = emails.primary(merged)
         c.execute("UPDATE leads SET data=?, email=?, email_tipo=?, updated_at=? WHERE id=?",
                   (json.dumps(data, ensure_ascii=False), email, tipo, _now(), lead_id))
+        _rescore(c, lead_id, data)  # e-mail disponível é um fator do score
     return True
 
 
@@ -381,6 +409,7 @@ def get_lead(lead_id: int) -> dict | None:
     out = _row_to_lead(row, full=True)
     out["sinais"] = sinais_mod.enrich(sinais)
     out["forca_sinais"] = round(sinais_mod.strength(sinais), 3)
+    out["score_detalhe"] = scoring.breakdown(out["detalhes"], sinais)
     return out
 
 

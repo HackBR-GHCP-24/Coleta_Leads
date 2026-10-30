@@ -136,12 +136,29 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
 - **Modo demo:** marque "Usar dados de demonstração" ou use `APP_MODE=mock` para gerar empresas **fictícias** marcadas com
   "(exemplo)" sem chamar o Foundry. Em `APP_MODE=auto`, falhas do Foundry também caem para o modo demo, com aviso.
 
-### Cálculo do ranking
+### Cálculo do ranking (explicável e ajustável)
 
-`score_final = 60% × score do agente + 40% × score heurístico`
+`score_final = Σ (peso do fator × valor do fator) ÷ Σ pesos × 100`
 
-O score heurístico combina aderência ao portfólio (35%), força dos sinais (25%), porte (20%), proximidade (10%: 100% na base,
-caindo linearmente até 30% com 3,5 h de carro) e nível de confiança (10%). Faixas: **quente** ≥ 75, **morno** ≥ 55, **frio** < 55.
+| Fator | Peso padrão | Valor (0–1) |
+|---|---|---|
+| Avaliação do agente (IA) | 50 | `score_oportunidade` ÷ 100 |
+| Aderência aos serviços | 15 | soma dos pesos dos serviços recomendados ÷ 3 (máx. 1) |
+| Sinais de compra | 12 | força dos sinais (abaixo) |
+| Porte | 8 | grande 1,0 · média 0,8 · pequena 0,5 |
+| Distância até a base | 6 | 1,0 na base, caindo até 0,3 com 3,5 h de carro (0,5 se desconhecida) |
+| E-mail disponível | 5 | encontrado na fonte ou manual 1,0 · inferido 0,5 · sem e-mail 0 |
+| Confiança dos dados | 4 | alta 1,0 · média 0,7 · baixa 0,4 |
+
+Cada serviço tem um peso de 0 a 3 (padrão 1): Acronis, Modern Work/serviços gerenciados, residentes N1/N2, banco de dados,
+redes/Fortigate, Windows Server/AD e infraestrutura cabeada. Faixas: **quente** ≥ 75, **morno** ≥ 55, **frio** < 55.
+
+- **⚙ Pesos** (no topo) abre a tela de configuração, com controles deslizantes para os pesos dos fatores (mostrados em %) e dos
+  serviços. **Salvar e recalcular** grava os pesos na tabela `settings` e recalcula o ranking de todos os leads na hora, sem
+  nova coleta. **Restaurar padrão** volta aos valores da tabela acima.
+- No detalhe do lead, **Por que este score?** mostra a decomposição: cada fator com o valor, o motivo (por exemplo, "1h05 de
+  carro até Itu" ou "7 sinais, 5 datados com fonte"), os pontos obtidos e o máximo possível, além dos serviços que contaram
+  para a aderência.
 
 **Força dos sinais** (0–1) = Σ(peso do tipo × fator) ÷ 1,2, limitada a 1. Pesos por tipo: expansão 1,0; incidente 1,0; troca de
 sistemas 0,9; vaga de TI 0,8; notícia 0,6; indício sem evidência 0,3. O fator decai com a idade (meia-vida de 180 dias:
@@ -156,7 +173,8 @@ Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{token}` |
 | GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status`, `min_score`, `q`, `com_email` (true/false) |
-| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo` e `forca_sinais`) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove) |
+| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo`, `forca_sinais` e `score_detalhe` com a decomposição do score) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove) |
+| GET / PUT | `/api/config/pesos` | Pesos do ranking (`{servicos: {acronis: 1, ...}, fatores: {agente: 50, ...}}`); o PUT valida, salva e recalcula todos os scores |
 | GET | `/api/stats`, `/api/meta` | KPIs e metadados |
 | POST | `/api/collect` | `{bases, max_horas, cidades, servicos, segmento, quantidade, modo}` → `{job_id}` |
 | POST | `/api/enrich` | `{lead_ids?, modo?}` → `{job_id}`. Busca e-mails via agente (sem `lead_ids`: todos os leads sem e-mail) |

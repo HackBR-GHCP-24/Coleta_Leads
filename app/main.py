@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, emails, mock_data, sinais as sinais_mod, verify
+from . import config, db, emails, mock_data, scoring, sinais as sinais_mod, verify
 from .auth import create_token, current_user
 
 log = logging.getLogger("coleta_leads")
@@ -43,6 +43,11 @@ class VerifyIn(BaseModel):
     lead_ids: list[int] = Field(default_factory=list, max_length=100)  # vazio = leads reais ainda não verificados
     todos: bool = False  # True = reverifica todos os leads reais
     buscar_cnpj: bool = True  # pede ao agente o CNPJ dos leads que ainda não têm (modo Foundry)
+
+
+class PesosIn(BaseModel):
+    servicos: dict[str, float] = Field(default_factory=dict)
+    fatores: dict[str, float] = Field(default_factory=dict)
 
 
 class EnrichIn(BaseModel):
@@ -100,6 +105,31 @@ def lead(lead_id: int, user: str = Depends(current_user)):
     if not found:
         raise HTTPException(404, "Lead não encontrado")
     return found
+
+
+def _pesos_payload() -> dict:
+    return {
+        "pesos": scoring.get_weights(),
+        "padrao": scoring.DEFAULT_WEIGHTS,
+        "limites": scoring.LIMITES,
+        "servicos": {k: {"label": v[0], "cobre": v[1]} for k, v in scoring.SERVICE_GROUPS.items()},
+        "fatores": scoring.FACTORS,
+    }
+
+
+@app.get("/api/config/pesos")
+def get_pesos(user: str = Depends(current_user)):
+    return _pesos_payload()
+
+
+@app.put("/api/config/pesos")
+def put_pesos(body: PesosIn, user: str = Depends(current_user)):
+    """Salva os pesos e recalcula o ranking de todos os leads sem nova coleta."""
+    try:
+        alterados = db.save_weights(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**_pesos_payload(), "recalculados": db.count_leads(), "alterados": alterados}
 
 
 @app.patch("/api/leads/{lead_id}")

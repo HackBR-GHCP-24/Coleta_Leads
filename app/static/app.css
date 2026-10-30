@@ -196,3 +196,28 @@ a.mail:hover { text-decoration: underline; }
 .tl-incidente .tl-dot, .tl-expansao .tl-dot { border-color: rgba(255,107,107,.5); }
 .tl-inferencia .tl-body { opacity: .7; border-style: dashed; }
 .tl-body .src { display: inline-block; margin-top: 4px; font-size: .78rem; }
+
+/* Por que este score */
+.why { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 8px 0 14px; }
+.why-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) 64px; gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.why-label { display: flex; flex-direction: column; min-width: 0; font-size: .86rem; }
+.why-label small { overflow-wrap: anywhere; }
+.why-bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
+.why-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7c6cff, #39d0b5); }
+.why-pts { text-align: right; display: flex; flex-direction: column; font-size: .9rem; }
+.why-pts small { font-size: .7rem; }
+.why-total { padding-top: 8px; font-size: .9rem; text-align: right; }
+.why-svcs { margin-top: 8px; }
+.tag.on { border-color: rgba(57,208,181,.5); }
+.tag.off { opacity: .45; }
+/* Tela de pesos */
+#weights-dialog { max-width: 640px; }
+.weights { display: grid; gap: 6px; }
+.wrow { display: grid; grid-template-columns: minmax(0, 1.2fr) 1fr 52px; gap: 12px; align-items: center; font-size: .88rem; margin: 0; }
+.wrow b { text-align: right; }
+@media (max-width: 560px) {
+  .why-row { grid-template-columns: minmax(0, 1fr) 56px; }
+  .why-bar { grid-column: 1 / -1; grid-row: 2; }
+  .wrow { grid-template-columns: 1fr 52px; }
+  .wrow input { grid-column: 1 / -1; grid-row: 2; }
+}
