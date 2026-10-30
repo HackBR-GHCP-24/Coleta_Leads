@@ -48,7 +48,13 @@
           <option value="3.5">Até 3,5 h de carro</option>
         </select>
         <select id="f-servico"><option value="">Todos os serviços</option></select>
-        <select id="f-status"><option value="">Todos os status</option></select>
+        <select id="f-status"><option value="">Todas as etapas</option></select>
+        <select id="f-resp"><option value="">Todos os responsáveis</option></select>
+        <select id="f-acao">
+          <option value="">Qualquer próxima ação</option>
+          <option value="vencida">⏰ Ações vencidas</option>
+          <option value="agendada">Com ação agendada</option>
+        </select>
         <select id="f-email">
           <option value="">Com ou sem e-mail</option>
           <option value="true">Com e-mail</option>
@@ -62,6 +68,10 @@
       <div class="panel">
         <div class="panel-head">
           <h2>Ranking de oportunidades</h2>
+          <div class="view-toggle" role="tablist">
+            <button id="view-table" class="active" role="tab" title="Ranking em tabela">☰ Tabela</button>
+            <button id="view-kanban" role="tab" title="Pipeline em kanban">▦ Kanban</button>
+          </div>
           <div class="head-actions">
             <span id="count" class="muted"></span>
             <button id="btn-verify" class="btn ghost small" title="Consulta CNPJ na Receita (BrasilAPI/ReceitaWS) e calcula a rota real de carro (OSRM)">✓ Verificar CNPJ e rotas</button>
@@ -74,12 +84,13 @@
           <table class="ranking">
             <thead><tr>
               <th>#</th><th>Empresa</th><th>Cidade</th><th class="hide-sm">E-mail</th><th class="hide-sm">Segmento</th>
-              <th class="hide-sm">Porte</th><th class="hide-md">Serviços</th><th>Score</th><th class="hide-sm">Status</th>
+              <th class="hide-sm">Porte</th><th class="hide-md">Serviços</th><th>Score</th><th class="hide-sm">Etapa</th>
             </tr></thead>
             <tbody id="leads-body"></tbody>
           </table>
           <p id="empty" class="muted center hidden">Nenhum lead encontrado com os filtros atuais.</p>
         </div>
+        <div id="kanban" class="kanban hidden"></div>
       </div>
     </main>
   </section>

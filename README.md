@@ -104,7 +104,16 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
   tempo de carro (até 1 h, 2 h ou 3,5 h), serviço, status, **com/sem e-mail**, score mínimo e busca textual. Cada lead mostra o
   tempo e a distância até a base e o e-mail principal (link `mailto:`, botão de copiar e selo *encontrado na fonte*/*inferido*/*manual*).
 - **Detalhes:** justificativa, necessidades, sinais com fontes, localização (base, km e tempo de carro), e-mails de contato com a
-  fonte de cada um, contato sugerido e alteração de status (novo → contatado → qualificado → proposta / descartado).
+  fonte de cada um, contato sugerido, pipeline do CRM e decomposição do score.
+- **Mini CRM:** pipeline por lead **novo → contatado → reunião → proposta → ganho/perdido**. No detalhe do lead, clique na
+  etapa para mover o lead, defina o **responsável**, a **próxima ação** e a data. Use **✓ Ação concluída** para registrar a
+  conclusão e adicione **notas**. Tudo vai para o **histórico**, com autor e data/hora (tabela `notas`): notas, mudanças de
+  etapa, de responsável e de próxima ação. Ações com data passada (fora de ganho/perdido) aparecem como **⏰ vencida** no
+  ranking, no kanban e no KPI **Próximas ações vencidas**. Clicar no KPI filtra essas ações. O ranking tem filtros por
+  **etapa**, **responsável** e **próxima ação** (vencidas/agendadas), e o botão **▦ Kanban** mostra o pipeline em colunas
+  (arraste os cards entre as etapas no desktop; no celular, as colunas rolam na horizontal). A migração converte os status
+  antigos (`qualificado` → `reuniao`, `descartado` → `perdido`) e adiciona as colunas `responsavel`, `proxima_acao` e
+  `proxima_acao_data`, sem perder os leads. Uma nova coleta não altera a etapa nem os dados do CRM de leads existentes.
 - **E-mails de leads já existentes:** o botão **✉ Buscar e-mails faltantes** pede ao agente os e-mails de todos os leads sem
   contato (4 em paralelo). No detalhe do lead, **🔎 Buscar com o agente** faz o mesmo para um lead e o campo de e-mail permite
   editar manualmente (vários separados por vírgula; vazio remove). Ao atualizar um lead numa nova coleta, os e-mails já conhecidos
@@ -172,8 +181,9 @@ Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{token}` |
-| GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status`, `min_score`, `q`, `com_email` (true/false) |
-| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo`, `forca_sinais` e `score_detalhe` com a decomposição do score) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove) |
+| GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status` (etapa), `min_score`, `q`, `com_email` (true/false), `responsavel`, `acao` (`vencida`/`agendada`) |
+| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo`, `forca_sinais` e `score_detalhe` com a decomposição do score) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove), `responsavel`, `proxima_acao` e `proxima_acao_data` (AAAA-MM-DD; `""` remove) |
+| POST | `/api/leads/{id}/notas` | `{texto}` → nota no histórico do lead (o histórico vem em `notas` no GET do lead) |
 | GET / PUT | `/api/config/pesos` | Pesos do ranking (`{servicos: {acronis: 1, ...}, fatores: {agente: 50, ...}}`); o PUT valida, salva e recalcula todos os scores |
 | GET | `/api/stats`, `/api/meta` | KPIs e metadados |
 | POST | `/api/collect` | `{bases, max_horas, cidades, servicos, segmento, quantidade, modo}` → `{job_id}` |

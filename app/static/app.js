@@ -61,7 +61,8 @@ function fillFilters() {
   opts("#f-cidade", m.cidades.map((c) => [c, c]), "Todas as cidades");
   opts("#f-base", m.bases.map((c) => [c, `Base ${c}`]), "Todas as bases");
   opts("#f-servico", Object.entries(m.servicos), "Todos os serviços");
-  opts("#f-status", m.status.map((s) => [s, s[0].toUpperCase() + s.slice(1)]), "Todos os status");
+  opts("#f-status", m.status.map((s) => [s, m.status_labels[s]]), "Todas as etapas");
+  opts("#f-resp", m.responsaveis.map((r) => [r, r]), "Todos os responsáveis");
   const chips = (sel, items, name, checked) => { $(sel).innerHTML = items.map(([v, l]) => `<label class="chip"><input type="checkbox" name="${name}" value="${esc(v)}" ${checked ? "checked" : ""}/>${esc(l)}</label>`).join(""); };
   chips("#c-bases", m.bases.map((c) => [c, c]), "base", true);
   chips("#c-servicos", Object.entries(m.servicos), "servico", false);
@@ -73,6 +74,9 @@ async function reloadCities() {
   const cur = $("#f-cidade").value;
   $("#f-cidade").innerHTML = `<option value="">Todas as cidades</option>` + state.meta.cidades.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
   $("#f-cidade").value = cur;
+  const r = $("#f-resp").value;
+  $("#f-resp").innerHTML = `<option value="">Todos os responsáveis</option>` + state.meta.responsaveis.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  $("#f-resp").value = r;
 }
 
 const fmtH = (h) => { if (h == null) return ""; if (h === 0) return "na base"; const t = Math.round(h * 60); return t < 60 ? `${t} min` : `${Math.floor(t / 60)}h${String(t % 60).padStart(2, "0")}`; };
@@ -80,7 +84,7 @@ const locLine = (l) => (l.tempo_viagem_h == null ? "distância não informada" :
 function showHoras() { $("#c-horas-val").textContent = `${String($("#c-horas").value).replace(".", ",")} h`; }
 $("#c-horas").addEventListener("input", showHoras);
 
-["#f-cidade", "#f-base", "#f-horas", "#f-servico", "#f-status", "#f-email"].forEach((s) => $(s).addEventListener("change", refresh));
+["#f-cidade", "#f-base", "#f-horas", "#f-servico", "#f-status", "#f-email", "#f-resp", "#f-acao"].forEach((s) => $(s).addEventListener("change", refresh));
 $("#f-score").addEventListener("input", (e) => { $("#f-score-val").textContent = e.target.value; debounce(); });
 $("#f-q").addEventListener("input", () => debounce());
 function debounce() { clearTimeout(state.timer); state.timer = setTimeout(refresh, 250); }
@@ -91,8 +95,9 @@ async function refresh() {
   add("cidade", $("#f-cidade").value); add("servico", $("#f-servico").value); add("status", $("#f-status").value);
   add("base", $("#f-base").value); add("max_horas", $("#f-horas").value); add("com_email", $("#f-email").value);
   add("q", $("#f-q").value.trim()); add("min_score", $("#f-score").value);
+  add("responsavel", $("#f-resp").value); add("acao", $("#f-acao").value);
   const [leads, stats] = await Promise.all([api(`/api/leads?${p}`), api("/api/stats")]);
-  renderKpis(stats); renderLeads(leads);
+  renderKpis(stats); renderLeads(leads); renderKanban(leads);
 }
 
 function renderKpis(s) {
@@ -104,6 +109,7 @@ function renderKpis(s) {
     kpi("Leads coletados", s.total, `${cities.length} cidade(s) · ` + cities.slice(0, 3).map(([c, n]) => `${esc(c)}: ${n}`).join(" · ")),
     kpi("Oportunidades quentes", s.quentes, "score ≥ 75"),
     kpi("Leads com e-mail", `${s.com_email}/${s.total}`, s.total ? `${Math.round((100 * s.com_email) / s.total)}% com contato` : ""),
+    `<div class="kpi clickable${s.acoes_vencidas ? " alert" : ""}" id="kpi-vencidas" title="Filtrar ações vencidas"><div class="label">Próximas ações vencidas</div><div class="value">${s.acoes_vencidas}</div><div class="sub">${s.acoes_agendadas} ação(ões) agendada(s) · ${s.por_status.ganho || 0} ganho(s)</div></div>`,
     kpi("Score médio", s.score_medio, "ranking ponderado"),
     kpi("Serviço mais demandado", top ? esc(state.meta.servicos[top[0]] || top[0]).split(" (")[0] : "—", top ? `${top[1]} lead(s)` : ""),
     kpi("Última coleta", last ? new Date(last.created_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—", last ? `${esc(last.status)} · ${esc(last.origem || "")}` : "nenhuma coleta ainda"),
@@ -154,7 +160,7 @@ function renderLeads(leads) {
       <td class="hide-sm" style="text-transform:capitalize">${esc(l.porte)}</td>
       <td class="hide-md"><div class="tags">${l.servicos.slice(0, 3).map((s) => `<span class="tag">${esc(svcLabel(s))}</span>`).join("")}${l.servicos.length > 3 ? `<span class="tag">+${l.servicos.length - 3}</span>` : ""}</div></td>
       <td><div class="score"><div class="bar"><i class="tier-${l.tier}" style="width:${l.score_final}%"></i></div><b>${l.score_final}</b></div></td>
-      <td class="hide-sm"><span class="pill">${esc(l.status)}</span></td>
+      <td class="hide-sm">${stagePill(l.status)}${l.acao_vencida ? `<span class="overdue" title="Próxima ação vencida em ${fmtDate(l.proxima_acao_data)}: ${esc(l.proxima_acao || "")}">⏰ vencida</span>` : ""}${l.responsavel ? `<small class="muted resp">👤 ${esc(l.responsavel)}</small>` : ""}</td>
     </tr>`).join("");
 }
 
@@ -183,6 +189,8 @@ async function openLead(id) {
       <div class="fact"><span>CNPJ ${d.origem_dados?.cadastro === "verificado" ? vbadge("verificado", `Conferido na Receita (${d.cnpj_dados?.fonte || ""}); ${d.origem_dados?.cnpj === "manual" ? "informado manualmente" : "encontrado pelo agente"}`) : vbadge(d.origem_dados?.cnpj, d.origem_dados?.cnpj === "ia" ? "CNPJ informado pelo agente, ainda não conferido" : "CNPJ informado manualmente")}</span>${esc(d.cnpj || "—")}${d.cnpj_fonte && safeUrl(d.cnpj_fonte) ? ` <a class="muted" href="${esc(safeUrl(d.cnpj_fonte))}" target="_blank" rel="noopener">fonte</a>` : ""}</div>
       <div class="fact"><span>Contato sugerido</span>${esc(d.contato_sugerido?.cargo || "—")}<br><small class="muted">${esc(d.contato_sugerido?.canal || "")}</small></div>
     </div>
+    <h3>Pipeline (CRM)</h3>
+    ${crmSection(l)}
     <h3>Por que este score? <span class="muted small-note">ajuste em ⚙ Pesos</span></h3>
     ${scoreWhy(l.score_detalhe)}
     <h3>Dados cadastrais ${d.origem_dados?.cadastro ? vbadge(d.origem_dados.cadastro) : l.origem === "demo" ? "" : vbadge("ia", "Sem CNPJ verificado: porte e segmento são estimativas da IA")}</h3>
@@ -199,8 +207,6 @@ async function openLead(id) {
       <button type="button" class="btn ghost small" id="lead-email-save">Salvar</button>
       <button type="button" class="btn ghost small" id="lead-email-agent">🔎 Buscar com o agente</button>
     </div>
-    <h3>Status do lead</h3>
-    <select id="lead-status">${state.meta.status.map((s) => `<option ${s === l.status ? "selected" : ""}>${s}</option>`).join("")}</select>
     <h3>Serviços recomendados</h3>
     <div class="tags">${l.servicos.map((s) => `<span class="tag">${esc(state.meta.servicos[s] || s)}</span>`).join("") || "—"}</div>
     <h3>Justificativa</h3><p>${esc(d.justificativa)}</p>
@@ -211,10 +217,7 @@ async function openLead(id) {
     <h3>Fontes</h3>${list(d.fontes, fonte)}
     ${d.observacao ? `<p class="muted">${esc(d.observacao)}</p>` : ""}
     <p class="muted"><small>Origem: ${esc(l.origem)} · atualizado em ${new Date(l.updated_at).toLocaleString("pt-BR")}</small></p>`;
-  $("#lead-status").addEventListener("change", async (e) => {
-    await api(`/api/leads/${id}`, { method: "PATCH", body: { status: e.target.value } });
-    toast("Status atualizado"); refresh();
-  });
+  bindCrm(id);
   $("#lead-cnpj-save").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.innerHTML = `<span class="spinner"></span>Consultando…`;
     try {
@@ -449,4 +452,98 @@ $("#weights-form").addEventListener("submit", async (e) => {
     st.textContent = `✅ Pesos salvos. ${r.recalculados} lead(s) recalculados, ${r.alterados} mudaram de score.`;
     refresh();
   } catch (err) { st.textContent = "❌ " + err.message; }
+});
+
+// ---------- Mini CRM ----------
+const fmtDate = (iso) => (iso ? new Date(iso + "T00:00").toLocaleDateString("pt-BR") : "");
+const stageLabel = (s) => state.meta.status_labels[s] || s;
+const stagePill = (s) => `<span class="pill stage st-${esc(s)}">${esc(stageLabel(s))}</span>`;
+const NOTA_ICON = { nota: "📝", etapa: "➜", acao: "📅", responsavel: "👤" };
+
+function crmSection(l) {
+  const steps = state.meta.status.map((s) => `<button type="button" class="stage-step st-${s}${s === l.status ? " current" : ""}" data-stage="${s}">${esc(stageLabel(s))}</button>`).join("");
+  const notas = (l.notas || []).map((n) => `<li class="nota-${esc(n.tipo)}"><span class="n-ico">${NOTA_ICON[n.tipo] || "•"}</span>
+      <div><div>${esc(n.texto)}</div><small class="muted">${esc(n.autor || "")} · ${new Date(n.created_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</small></div></li>`).join("");
+  return `<div class="crm">
+    <div class="stages">${steps}</div>
+    <div class="crm-grid">
+      <label>Responsável<input id="crm-resp" list="crm-resp-list" maxlength="80" placeholder="ex.: Ana (comercial)" value="${esc(l.responsavel || "")}" />
+        <datalist id="crm-resp-list">${state.meta.responsaveis.map((r) => `<option value="${esc(r)}">`).join("")}</datalist></label>
+      <label>Próxima ação<input id="crm-acao" maxlength="300" placeholder="ex.: Ligar para o gerente de TI" value="${esc(l.proxima_acao || "")}" /></label>
+      <label>Data<input id="crm-data" type="date" value="${esc(l.proxima_acao_data || "")}" /></label>
+    </div>
+    ${l.acao_vencida ? `<p class="overdue-msg">⏰ Próxima ação vencida desde ${fmtDate(l.proxima_acao_data)}.</p>` : ""}
+    <div class="email-edit"><button type="button" class="btn ghost small" id="crm-save">Salvar responsável e próxima ação</button>
+      ${l.proxima_acao ? `<button type="button" class="btn ghost small" id="crm-done">✓ Ação concluída</button>` : ""}</div>
+    <div class="email-edit"><textarea id="crm-nota" rows="2" maxlength="2000" placeholder="Adicionar nota (ligação, reunião, objeções…)"></textarea>
+      <button type="button" class="btn ghost small" id="crm-nota-add">＋ Nota</button></div>
+    <h4>Histórico</h4>
+    ${notas ? `<ul class="notas">${notas}</ul>` : `<p class="muted">Sem histórico ainda.</p>`}
+  </div>`;
+}
+
+function bindCrm(id) {
+  const patch = async (body, msg) => {
+    try { await api(`/api/leads/${id}`, { method: "PATCH", body }); toast(msg); await reloadCities(); refresh(); openLead(id); }
+    catch (err) { toast("❌ " + err.message); }
+  };
+  document.querySelectorAll(".stage-step").forEach((b) => b.addEventListener("click", () => {
+    if (!b.classList.contains("current")) patch({ status: b.dataset.stage }, `Etapa: ${stageLabel(b.dataset.stage)}`);
+  }));
+  $("#crm-save").addEventListener("click", () => patch({
+    responsavel: $("#crm-resp").value, proxima_acao: $("#crm-acao").value, proxima_acao_data: $("#crm-data").value,
+  }, "Próxima ação salva"));
+  $("#crm-done")?.addEventListener("click", async () => {
+    await api(`/api/leads/${id}/notas`, { method: "POST", body: { texto: `Ação concluída: ${$("#crm-acao").value}` } });
+    patch({ proxima_acao: "", proxima_acao_data: "" }, "Ação concluída");
+  });
+  $("#crm-nota-add").addEventListener("click", async () => {
+    const texto = $("#crm-nota").value.trim();
+    if (!texto) return;
+    try { await api(`/api/leads/${id}/notas`, { method: "POST", body: { texto } }); toast("Nota adicionada"); openLead(id); }
+    catch (err) { toast("❌ " + err.message); }
+  });
+}
+
+function renderKanban(leads) {
+  const cols = state.meta.status.map((s) => {
+    const items = leads.filter((l) => l.status === s);
+    return `<section class="kcol st-${s}" data-stage="${s}">
+      <header>${stagePill(s)}<span class="muted">${items.length}</span></header>
+      <div class="kcards">${items.map((l) => `
+        <article class="kcard${l.acao_vencida ? " late" : ""}" draggable="true" data-id="${l.id}">
+          <div class="kc-top"><b>${esc(l.empresa)}</b><span class="kscore tier-${l.tier}">${l.score_final}</span></div>
+          <small class="muted">${esc(l.cidade)} · ${esc(l.segmento || "")}</small>
+          ${l.responsavel ? `<small>👤 ${esc(l.responsavel)}</small>` : ""}
+          ${l.proxima_acao || l.proxima_acao_data ? `<small class="${l.acao_vencida ? "overdue" : "muted"}">${l.acao_vencida ? "⏰" : "📅"} ${esc(l.proxima_acao || "")}${l.proxima_acao_data ? ` · ${fmtDate(l.proxima_acao_data)}` : ""}</small>` : ""}
+        </article>`).join("") || `<p class="muted kempty">Arraste um lead para cá</p>`}</div>
+    </section>`;
+  }).join("");
+  $("#kanban").innerHTML = cols;
+}
+
+function setView(v) {
+  state.view = v; localStorage.setItem("view", v);
+  $("#view-table").classList.toggle("active", v === "table"); $("#view-kanban").classList.toggle("active", v === "kanban");
+  document.querySelector(".table-wrap").classList.toggle("hidden", v === "kanban");
+  $("#kanban").classList.toggle("hidden", v !== "kanban");
+}
+$("#view-table").addEventListener("click", () => setView("table"));
+$("#view-kanban").addEventListener("click", () => setView("kanban"));
+setView(localStorage.getItem("view") || "table");
+
+$("#kanban").addEventListener("click", (e) => { const c = e.target.closest(".kcard"); if (c) openLead(c.dataset.id); });
+$("#kanban").addEventListener("dragstart", (e) => { const c = e.target.closest(".kcard"); if (c) { e.dataTransfer.setData("text/plain", c.dataset.id); c.classList.add("dragging"); } });
+$("#kanban").addEventListener("dragend", (e) => e.target.closest(".kcard")?.classList.remove("dragging"));
+$("#kanban").addEventListener("dragover", (e) => { const col = e.target.closest(".kcol"); if (col) { e.preventDefault(); col.classList.add("over"); } });
+$("#kanban").addEventListener("dragleave", (e) => e.target.closest(".kcol")?.classList.remove("over"));
+$("#kanban").addEventListener("drop", async (e) => {
+  const col = e.target.closest(".kcol"); if (!col) return;
+  e.preventDefault(); col.classList.remove("over");
+  const id = e.dataTransfer.getData("text/plain");
+  try { await api(`/api/leads/${id}`, { method: "PATCH", body: { status: col.dataset.stage } }); toast(`Etapa: ${stageLabel(col.dataset.stage)}`); refresh(); }
+  catch (err) { toast("❌ " + err.message); }
+});
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#kpi-vencidas")) { $("#f-acao").value = "vencida"; refresh(); }
 });

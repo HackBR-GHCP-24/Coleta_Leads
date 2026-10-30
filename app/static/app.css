@@ -221,3 +221,49 @@ a.mail:hover { text-decoration: underline; }
   .wrow { grid-template-columns: 1fr 52px; }
   .wrow input { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* Mini CRM */
+.view-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-right: auto; margin-left: 14px; }
+.view-toggle button { background: transparent; color: var(--muted); border: 0; padding: 6px 12px; font: inherit; font-size: .85rem; cursor: pointer; }
+.view-toggle button.active { background: rgba(124,108,255,.25); color: var(--text); }
+.pill.stage { white-space: nowrap; }
+.st-novo { --st: #8b93a7; } .st-contatado { --st: #4ea8ff; } .st-reuniao { --st: #b07cff; }
+.st-proposta { --st: #ffb84d; } .st-ganho { --st: #39d0b5; } .st-perdido { --st: #ff6b6b; }
+.pill.stage, .stage-step { border: 1px solid var(--st); color: var(--st); background: color-mix(in srgb, var(--st) 12%, transparent); }
+.overdue { display: inline-block; color: #ff6b6b; font-weight: 600; font-size: .78rem; margin-left: 6px; }
+td small.resp { display: block; margin-top: 4px; }
+.kpi.clickable { cursor: pointer; }
+.kpi.alert { border-color: rgba(255,107,107,.6); }
+.kpi.alert .value { color: #ff6b6b; }
+.crm { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 8px 0 14px; }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.stage-step { border-radius: 999px; padding: 5px 12px; font: inherit; font-size: .82rem; cursor: pointer; opacity: .55; }
+.stage-step.current { opacity: 1; font-weight: 700; box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 35%, transparent); }
+.stage-step:hover { opacity: 1; }
+.crm-grid { display: grid; grid-template-columns: 1fr 1.6fr 150px; gap: 10px; }
+.crm-grid label { display: flex; flex-direction: column; gap: 4px; font-size: .8rem; color: var(--muted); margin: 0; }
+.crm textarea { flex: 1; resize: vertical; min-height: 44px; font: inherit; color: inherit; background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.overdue-msg { color: #ff6b6b; font-weight: 600; margin: 8px 0 0; }
+.crm h4 { margin: 14px 0 6px; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.notas { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.notas li { display: flex; gap: 10px; font-size: .86rem; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,.03); }
+.notas .n-ico { flex: 0 0 20px; text-align: center; }
+.notas .nota-nota { background: rgba(124,108,255,.10); }
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(230px, 1fr); gap: 12px; overflow-x: auto; padding: 4px 2px 10px; scroll-snap-type: x mandatory; }
+.kcol { background: rgba(255,255,255,.025); border: 1px solid var(--line); border-top: 3px solid var(--st); border-radius: 12px; padding: 10px; min-height: 200px; scroll-snap-align: start; display: flex; flex-direction: column; }
+.kcol.over { background: color-mix(in srgb, var(--st) 10%, transparent); }
+.kcol header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.kcards { display: grid; gap: 8px; align-content: start; max-height: 70vh; overflow-y: auto; }
+.kcard { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; display: flex; flex-direction: column; gap: 3px; cursor: pointer; font-size: .86rem; }
+.kcard:hover { border-color: var(--st, #7c6cff); }
+.kcard.late { border-left: 3px solid #ff6b6b; }
+.kcard.dragging { opacity: .4; }
+.kc-top { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+.kscore { font-weight: 700; font-size: .8rem; padding: 1px 7px; border-radius: 999px; background: rgba(255,255,255,.06); }
+.kscore.tier-quente { color: #ff8a65; } .kscore.tier-morno { color: #ffd166; } .kscore.tier-frio { color: #8fb3ff; }
+.kempty { font-size: .8rem; text-align: center; padding: 18px 0; }
+@media (max-width: 700px) {
+  .crm-grid { grid-template-columns: 1fr; }
+  .kanban { grid-auto-columns: 82%; }
+  .view-toggle { margin-left: 0; }
+}

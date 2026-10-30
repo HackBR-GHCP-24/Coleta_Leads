@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -37,6 +38,13 @@ class StatusIn(BaseModel):
     status: str | None = None
     email: str | None = None  # "" remove os e-mails; valor substitui pelos informados manualmente
     cnpj: str | None = None  # "" remove o CNPJ; valor informado manualmente é verificado na BrasilAPI/ReceitaWS
+    responsavel: str | None = Field(default=None, max_length=80)  # "" remove
+    proxima_acao: str | None = Field(default=None, max_length=300)  # "" remove
+    proxima_acao_data: str | None = None  # AAAA-MM-DD; "" remove
+
+
+class NotaIn(BaseModel):
+    texto: str = Field(min_length=1, max_length=2000)
 
 
 class VerifyIn(BaseModel):
@@ -85,6 +93,8 @@ def meta(user: str = Depends(current_user)):
         "cidades": db.distinct_cities(),
         "servicos": config.SERVICES,
         "status": db.STATUSES,
+        "status_labels": db.STATUS_LABELS,
+        "responsaveis": db.responsaveis(),
         "modo": "foundry" if config.foundry_enabled() else "mock",
         "agent_id": config.FOUNDRY_AGENT_ID or None,
         "verificacao": verify.enabled(),
@@ -95,8 +105,9 @@ def meta(user: str = Depends(current_user)):
 @app.get("/api/leads")
 def leads(cidade: str | None = None, servico: str | None = None, min_score: int = 0, status: str | None = None,
           q: str | None = None, base: str | None = None, max_horas: float | None = None,
-          com_email: bool | None = None, user: str = Depends(current_user)):
-    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas, com_email)
+          com_email: bool | None = None, responsavel: str | None = None, acao: str | None = None,
+          user: str = Depends(current_user)):
+    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas, com_email, responsavel, acao)
 
 
 @app.get("/api/leads/{lead_id}")
@@ -139,7 +150,14 @@ def update_lead(lead_id: int, body: StatusIn, user: str = Depends(current_user))
     if body.status is not None:
         if body.status not in db.STATUSES:
             raise HTTPException(400, "Status inválido")
-        db.set_status(lead_id, body.status)
+        db.set_status(lead_id, body.status, user)
+    if body.proxima_acao_data:
+        try:
+            date.fromisoformat(body.proxima_acao_data)
+        except ValueError as exc:
+            raise HTTPException(400, "Data da próxima ação inválida (use AAAA-MM-DD)") from exc
+    db.set_crm(lead_id, {"responsavel": body.responsavel, "proxima_acao": body.proxima_acao,
+                         "proxima_acao_data": body.proxima_acao_data}, user)
     if body.email is not None:
         values = [e.strip() for e in body.email.replace(";", ",").split(",") if e.strip()]
         bad = [e for e in values if not emails.valid(e)]
@@ -158,6 +176,13 @@ def update_lead(lead_id: int, body: StatusIn, user: str = Depends(current_user))
             data["origem_dados"] = {**(data.get("origem_dados") or {}), "cnpj": "manual" if cnpj else None}
         db.save_lead_data(lead_id, data)
     return db.get_lead(lead_id)
+
+
+@app.post("/api/leads/{lead_id}/notas")
+def add_note(lead_id: int, body: NotaIn, user: str = Depends(current_user)):
+    if not db.get_lead(lead_id):
+        raise HTTPException(404, "Lead não encontrado")
+    return db.add_note(lead_id, body.texto.strip(), user)
 
 
 @app.get("/api/stats")

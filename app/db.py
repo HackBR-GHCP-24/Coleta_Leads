@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS sinais (
     UNIQUE (lead_id, chave)
 );
 CREATE INDEX IF NOT EXISTS ix_sinais_lead ON sinais(lead_id);
+CREATE TABLE IF NOT EXISTS notas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    tipo TEXT NOT NULL DEFAULT 'nota',
+    texto TEXT NOT NULL,
+    autor TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_notas_lead ON notas(lead_id);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -72,7 +81,15 @@ CREATE TABLE IF NOT EXISTS api_cache (
 # Campos de verificação (CNPJ/rota) preservados quando o agente atualiza um lead existente
 VERIFIED_KEYS = ("cnpj", "cnpj_fonte", "cnpj_dados", "rota", "origem_dados", "verificado_em", "uf")
 
-STATUSES = ["novo", "contatado", "qualificado", "proposta", "descartado"]
+# Pipeline do mini CRM
+STATUSES = ["novo", "contatado", "reuniao", "proposta", "ganho", "perdido"]
+STATUS_LABELS = {"novo": "Novo", "contatado": "Contatado", "reuniao": "Reunião", "proposta": "Proposta",
+                 "ganho": "Ganho", "perdido": "Perdido"}
+_STATUS_MIGRA = {"qualificado": "reuniao", "descartado": "perdido"}
+
+
+def _today() -> str:
+    return datetime.now().date().isoformat()
 
 
 def _now() -> str:
@@ -113,6 +130,11 @@ def _migrate(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE leads ADD COLUMN email TEXT")
     if "email_tipo" not in cols:
         c.execute("ALTER TABLE leads ADD COLUMN email_tipo TEXT")
+    for col in ("responsavel", "proxima_acao", "proxima_acao_data"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE leads ADD COLUMN {col} TEXT")
+    for antigo, novo in _STATUS_MIGRA.items():  # etapas antigas → pipeline novo
+        c.execute("UPDATE leads SET status=? WHERE status=?", (novo, antigo))
     for row in c.execute("SELECT id, data FROM leads WHERE email IS NULL").fetchall():
         data = json.loads(row["data"])
         contacts = emails.normalize(data.get("contatos_email"))
@@ -343,6 +365,11 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
         "tier": tier(row["score_final"]),
         "servicos": json.loads(row["servicos"] or "[]"),
         "status": row["status"],
+        "responsavel": row["responsavel"],
+        "proxima_acao": row["proxima_acao"],
+        "proxima_acao_data": row["proxima_acao_data"],
+        "acao_vencida": bool(row["proxima_acao_data"] and row["proxima_acao_data"] < _today()
+                             and row["status"] not in ("ganho", "perdido")),
         "origem": row["origem"],
         "nivel_confianca": data.get("nivel_confianca"),
         "necessidades": data.get("necessidades") or [],
@@ -364,9 +391,17 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
 
 
 def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None, base=None, max_horas=None,
-               com_email=None) -> list[dict]:
+               com_email=None, responsavel=None, acao=None) -> list[dict]:
     sql = "SELECT * FROM leads WHERE score_final >= ?"
     args: list = [min_score]
+    if responsavel:
+        sql += " AND responsavel = ?"
+        args.append(responsavel)
+    if acao == "vencida":
+        sql += " AND proxima_acao_data < ? AND status NOT IN ('ganho', 'perdido')"
+        args.append(_today())
+    elif acao == "agendada":
+        sql += " AND proxima_acao_data IS NOT NULL AND status NOT IN ('ganho', 'perdido')"
     if com_email is True:
         sql += " AND email IS NOT NULL"
     elif com_email is False:
@@ -381,8 +416,8 @@ def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None, base
         sql += " AND servicos LIKE ?"
         args.append(f'%"{servico}"%')
     if q:
-        sql += " AND (empresa LIKE ? OR segmento LIKE ? OR data LIKE ?)"
-        args += [f"%{q}%"] * 3
+        sql += " AND (empresa LIKE ? OR segmento LIKE ? OR data LIKE ? OR responsavel LIKE ?)"
+        args += [f"%{q}%"] * 4
     sql += " ORDER BY score_final DESC, updated_at DESC"
     with conn() as c:
         rows = c.execute(sql, args).fetchall()
@@ -404,19 +439,64 @@ def get_lead(lead_id: int) -> dict | None:
     with conn() as c:
         row = c.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
         sinais = _signals(c, lead_id) if row else []
+        notas = [dict(r) for r in c.execute(
+            "SELECT id, tipo, texto, autor, created_at FROM notas WHERE lead_id=? ORDER BY id DESC", (lead_id,))]
     if not row:
         return None
     out = _row_to_lead(row, full=True)
     out["sinais"] = sinais_mod.enrich(sinais)
     out["forca_sinais"] = round(sinais_mod.strength(sinais), 3)
     out["score_detalhe"] = scoring.breakdown(out["detalhes"], sinais)
+    out["notas"] = notas
     return out
 
 
-def set_status(lead_id: int, status: str) -> bool:
+def _log(c: sqlite3.Connection, lead_id: int, tipo: str, texto: str, autor: str | None) -> None:
+    c.execute("INSERT INTO notas(lead_id, tipo, texto, autor, created_at) VALUES (?,?,?,?,?)",
+              (lead_id, tipo, texto, autor, _now()))
+
+
+def set_status(lead_id: int, status: str, autor: str | None = None) -> bool:
     with conn() as c:
-        cur = c.execute("UPDATE leads SET status=?, updated_at=? WHERE id=?", (status, _now(), lead_id))
-    return cur.rowcount > 0
+        row = c.execute("SELECT status FROM leads WHERE id=?", (lead_id,)).fetchone()
+        if not row:
+            return False
+        if row["status"] != status:
+            c.execute("UPDATE leads SET status=?, updated_at=? WHERE id=?", (status, _now(), lead_id))
+            _log(c, lead_id, "etapa", f"{STATUS_LABELS.get(row['status'], row['status'])} → {STATUS_LABELS[status]}", autor)
+    return True
+
+
+def set_crm(lead_id: int, fields: dict, autor: str | None = None) -> None:
+    """Atualiza responsável e próxima ação (None = não altera; "" = limpa) e registra no histórico."""
+    with conn() as c:
+        row = c.execute("SELECT responsavel, proxima_acao, proxima_acao_data FROM leads WHERE id=?", (lead_id,)).fetchone()
+        for col, valor in fields.items():
+            if valor is None:
+                continue
+            valor = valor.strip() or None
+            if valor == row[col]:
+                continue
+            c.execute(f"UPDATE leads SET {col}=?, updated_at=? WHERE id=?", (valor, _now(), lead_id))
+            if col == "responsavel":
+                _log(c, lead_id, "responsavel", f"Responsável: {valor or '— (removido)'}", autor)
+            elif col == "proxima_acao":
+                _log(c, lead_id, "acao", f"Próxima ação: {valor or '— (concluída/removida)'}", autor)
+            else:
+                data = datetime.fromisoformat(valor).strftime("%d/%m/%Y") if valor else "sem data"
+                _log(c, lead_id, "acao", f"Data da próxima ação: {data}", autor)
+
+
+def add_note(lead_id: int, texto: str, autor: str | None) -> dict:
+    with conn() as c:
+        _log(c, lead_id, "nota", texto, autor)
+        c.execute("UPDATE leads SET updated_at=? WHERE id=?", (_now(), lead_id))
+        return dict(c.execute("SELECT id, tipo, texto, autor, created_at FROM notas WHERE id=last_insert_rowid()").fetchone())
+
+
+def responsaveis() -> list[str]:
+    with conn() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT responsavel FROM leads WHERE responsavel IS NOT NULL ORDER BY 1")]
 
 
 def stats() -> dict:
@@ -424,6 +504,9 @@ def stats() -> dict:
         total = c.execute("SELECT COUNT(*) n, COALESCE(AVG(score_final),0) avg FROM leads").fetchone()
         quentes = c.execute("SELECT COUNT(*) FROM leads WHERE score_final >= 75").fetchone()[0]
         com_email = c.execute("SELECT COUNT(*) FROM leads WHERE email IS NOT NULL").fetchone()[0]
+        vencidas = c.execute("SELECT COUNT(*) FROM leads WHERE proxima_acao_data < ? AND status NOT IN ('ganho','perdido')",
+                             (_today(),)).fetchone()[0]
+        agendadas = c.execute("SELECT COUNT(*) FROM leads WHERE proxima_acao_data IS NOT NULL AND status NOT IN ('ganho','perdido')").fetchone()[0]
         por_cidade = {r[0]: r[1] for r in c.execute("SELECT cidade, COUNT(*) FROM leads GROUP BY cidade")}
         por_status = {r[0]: r[1] for r in c.execute("SELECT status, COUNT(*) FROM leads GROUP BY status")}
         servicos: dict[str, int] = {}
@@ -436,6 +519,8 @@ def stats() -> dict:
         "score_medio": round(total["avg"]),
         "quentes": quentes,
         "com_email": com_email,
+        "acoes_vencidas": vencidas,
+        "acoes_agendadas": agendadas,
         "por_cidade": por_cidade,
         "por_status": por_status,
         "por_servico": servicos,
