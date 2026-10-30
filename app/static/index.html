@@ -49,6 +49,11 @@
         </select>
         <select id="f-servico"><option value="">Todos os serviços</option></select>
         <select id="f-status"><option value="">Todas as etapas</option></select>
+        <select id="f-perfil" title="Perfil de cliente ideal: PMEs sem TI interna robusta">
+          <option value="dentro" selected>🎯 Dentro do perfil</option>
+          <option value="fora">🚫 Fora do perfil</option>
+          <option value="todos">Todos os perfis</option>
+        </select>
         <select id="f-resp"><option value="">Todos os responsáveis</option></select>
         <select id="f-acao">
           <option value="">Qualquer próxima ação</option>
@@ -76,6 +81,7 @@
             <span id="count" class="muted"></span>
             <button id="btn-verify" class="btn ghost small" title="Consulta CNPJ na Receita (BrasilAPI/ReceitaWS) e calcula a rota real de carro (OSRM)">✓ Verificar CNPJ e rotas</button>
             <button id="btn-signals" class="btn ghost small" title="Pede ao agente sinais de compra datados (vagas, expansão, incidentes, troca de sistemas) dos leads sem sinal recente">📡 Buscar sinais</button>
+            <button id="btn-perfil" class="btn ghost small" title="Reavalia com o agente e a Receita (capital social) se cada lead é PME sem TI interna robusta">🎯 Reavaliar perfil</button>
             <button id="btn-enrich" class="btn ghost small" title="Pede ao agente os e-mails dos leads que ainda não têm">✉ Buscar e-mails faltantes</button>
           </div>
         </div>
@@ -138,6 +144,10 @@
         para o lead (3 pontos = 100%). Ao salvar, o ranking é recalculado na hora, sem nova coleta.</p>
       <fieldset><legend>Fatores do score</legend><div id="w-fatores" class="weights"></div></fieldset>
       <fieldset><legend>Peso por serviço (aderência)</legend><div id="w-servicos" class="weights"></div></fieldset>
+      <fieldset><legend>Perfil de cliente ideal (PME sem TI interna)</legend>
+        <p class="muted small-note">Fora do perfil: funcionários fora da faixa, TI interna estruturada, grupo multinacional ou capital
+          social acima do limite (Receita). Esses leads perdem a penalidade abaixo e ficam ocultos por padrão (filtro 🎯).</p>
+        <div id="w-perfil" class="weights perfil-cfg"></div></fieldset>
       <div id="weights-status" class="collect-status hidden"></div>
       <div class="actions">
         <button type="button" class="btn ghost" id="weights-reset">Restaurar padrão</button>

@@ -84,7 +84,7 @@ const locLine = (l) => (l.tempo_viagem_h == null ? "distância não informada" :
 function showHoras() { $("#c-horas-val").textContent = `${String($("#c-horas").value).replace(".", ",")} h`; }
 $("#c-horas").addEventListener("input", showHoras);
 
-["#f-cidade", "#f-base", "#f-horas", "#f-servico", "#f-status", "#f-email", "#f-resp", "#f-acao"].forEach((s) => $(s).addEventListener("change", refresh));
+["#f-cidade", "#f-base", "#f-horas", "#f-servico", "#f-status", "#f-email", "#f-resp", "#f-acao", "#f-perfil"].forEach((s) => $(s).addEventListener("change", refresh));
 $("#f-score").addEventListener("input", (e) => { $("#f-score-val").textContent = e.target.value; debounce(); });
 $("#f-q").addEventListener("input", () => debounce());
 function debounce() { clearTimeout(state.timer); state.timer = setTimeout(refresh, 250); }
@@ -95,7 +95,7 @@ async function refresh() {
   add("cidade", $("#f-cidade").value); add("servico", $("#f-servico").value); add("status", $("#f-status").value);
   add("base", $("#f-base").value); add("max_horas", $("#f-horas").value); add("com_email", $("#f-email").value);
   add("q", $("#f-q").value.trim()); add("min_score", $("#f-score").value);
-  add("responsavel", $("#f-resp").value); add("acao", $("#f-acao").value);
+  add("responsavel", $("#f-resp").value); add("acao", $("#f-acao").value); add("perfil", $("#f-perfil").value);
   const [leads, stats] = await Promise.all([api(`/api/leads?${p}`), api("/api/stats")]);
   renderKpis(stats); renderLeads(leads); renderKanban(leads);
 }
@@ -106,10 +106,11 @@ function renderKpis(s) {
   const kpi = (label, value, sub = "") => `<div class="kpi"><div class="label">${label}</div><div class="value${String(value).length > 8 ? " small" : ""}">${value}</div><div class="sub">${sub}</div></div>`;
   const cities = Object.entries(s.por_cidade).sort((a, b) => b[1] - a[1]);
   $("#kpis").innerHTML = [
-    kpi("Leads coletados", s.total, `${cities.length} cidade(s) · ` + cities.slice(0, 3).map(([c, n]) => `${esc(c)}: ${n}`).join(" · ")),
+    kpi("Leads no perfil", s.total, `${cities.length} cidade(s) · ` + cities.slice(0, 3).map(([c, n]) => `${esc(c)}: ${n}`).join(" · ")),
     kpi("Oportunidades quentes", s.quentes, "score ≥ 75"),
     kpi("Leads com e-mail", `${s.com_email}/${s.total}`, s.total ? `${Math.round((100 * s.com_email) / s.total)}% com contato` : ""),
     `<div class="kpi clickable${s.acoes_vencidas ? " alert" : ""}" id="kpi-vencidas" title="Filtrar ações vencidas"><div class="label">Próximas ações vencidas</div><div class="value">${s.acoes_vencidas}</div><div class="sub">${s.acoes_agendadas} ação(ões) agendada(s) · ${s.por_status.ganho || 0} ganho(s)</div></div>`,
+    `<div class="kpi clickable" id="kpi-fora" title="Ver leads fora do perfil"><div class="label">Fora do perfil (ocultos)</div><div class="value">${s.fora_do_perfil}</div><div class="sub">grandes empresas / TI interna · clique para ver</div></div>`,
     kpi("Score médio", s.score_medio, "ranking ponderado"),
     kpi("Serviço mais demandado", top ? esc(state.meta.servicos[top[0]] || top[0]).split(" (")[0] : "—", top ? `${top[1]} lead(s)` : ""),
     kpi("Última coleta", last ? new Date(last.created_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—", last ? `${esc(last.status)} · ${esc(last.origem || "")}` : "nenhuma coleta ainda"),
@@ -153,7 +154,7 @@ function renderLeads(leads) {
   $("#leads-body").innerHTML = leads.map((l) => `
     <tr data-id="${l.id}">
       <td class="rank">${l.rank}</td>
-      <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}${cnpjBadge(l)}</small>${l.sinais_datados ? `<small class="muted" title="Sinais de compra datados com fonte">📡 ${l.sinais_datados} sinal(is) · último ${idade(l.ultimo_sinal)}</small>` : ""}${l.email ? `<small class="m-email">✉ ${emailLink(l.email)}${copyBtn(l.email)}</small>` : ""}</td>
+      <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}${cnpjBadge(l)}${perfilBadge(l)}</small>${l.sinais_datados ? `<small class="muted" title="Sinais de compra datados com fonte">📡 ${l.sinais_datados} sinal(is) · último ${idade(l.ultimo_sinal)}</small>` : ""}${l.email ? `<small class="m-email">✉ ${emailLink(l.email)}${copyBtn(l.email)}</small>` : ""}</td>
       <td class="city">${esc(l.cidade)}<small>${esc(locLine(l))}${locBadge(l)}</small></td>
       <td class="email hide-sm">${emailCell(l)}</td>
       <td class="hide-sm">${esc(l.segmento)}</td>
@@ -189,6 +190,8 @@ async function openLead(id) {
       <div class="fact"><span>CNPJ ${d.origem_dados?.cadastro === "verificado" ? vbadge("verificado", `Conferido na Receita (${d.cnpj_dados?.fonte || ""}); ${d.origem_dados?.cnpj === "manual" ? "informado manualmente" : "encontrado pelo agente"}`) : vbadge(d.origem_dados?.cnpj, d.origem_dados?.cnpj === "ia" ? "CNPJ informado pelo agente, ainda não conferido" : "CNPJ informado manualmente")}</span>${esc(d.cnpj || "—")}${d.cnpj_fonte && safeUrl(d.cnpj_fonte) ? ` <a class="muted" href="${esc(safeUrl(d.cnpj_fonte))}" target="_blank" rel="noopener">fonte</a>` : ""}</div>
       <div class="fact"><span>Contato sugerido</span>${esc(d.contato_sugerido?.cargo || "—")}<br><small class="muted">${esc(d.contato_sugerido?.canal || "")}</small></div>
     </div>
+    <h3>Perfil de cliente ideal <span class="muted small-note">PME de ${(state.perfilCfg || state.meta.perfil).func_min}–${(state.perfilCfg || state.meta.perfil).func_max} funcionários sem TI interna robusta</span></h3>
+    ${perfilSection(l)}
     <h3>Pipeline (CRM)</h3>
     ${crmSection(l)}
     <h3>Por que este score? <span class="muted small-note">ajuste em ⚙ Pesos</span></h3>
@@ -218,6 +221,12 @@ async function openLead(id) {
     ${d.observacao ? `<p class="muted">${esc(d.observacao)}</p>` : ""}
     <p class="muted"><small>Origem: ${esc(l.origem)} · atualizado em ${new Date(l.updated_at).toLocaleString("pt-BR")}</small></p>`;
   bindCrm(id);
+  $("#drawer-content").querySelectorAll("[data-perfil]").forEach((b) => b.addEventListener("click", async () => {
+    try {
+      await api(`/api/leads/${id}`, { method: "PATCH", body: { perfil: b.dataset.perfil, perfil_motivo: $("#perfil-motivo").value } });
+      toast("Perfil atualizado"); refresh(); openLead(id);
+    } catch (err) { toast("❌ " + err.message); }
+  }));
   $("#lead-cnpj-save").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.innerHTML = `<span class="spinner"></span>Consultando…`;
     try {
@@ -283,8 +292,38 @@ function scoreWhy(b) {
       <div class="why-pts"><b>+${String(f.pontos).replace(".", ",")}</b><small class="muted">de ${String(f.peso_pct).replace(".", ",")}</small></div>
     </div>`).join("");
   const svcs = b.servicos.map((s) => `<span class="tag ${s.recomendado ? "on" : "off"}" title="${s.recomendado ? "Recomendado pelo agente" : "Não recomendado"} · peso ${s.peso}">${s.recomendado ? "✓" : "–"} ${esc(s.label)} ×${String(s.peso).replace(".", ",")}</span>`).join("");
-  return `<div class="why">${rows}<div class="why-total">Score final <b>${b.score}</b> = soma dos pontos</div>
+  const pen = b.penalidade ? `<div class="why-row why-pen" title="Leads fora do perfil perdem ${b.penalidade.pct}% do score (ajuste em ⚙ Pesos)">
+      <div class="why-label"><b>Penalidade: fora do perfil (−${b.penalidade.pct}%)</b><small class="muted">${esc(b.penalidade.motivos.join("; "))}</small></div>
+      <div class="why-bar"><i style="width:${b.penalidade.pct}%"></i></div>
+      <div class="why-pts"><b>−${String(b.penalidade.pontos).replace(".", ",")}</b></div></div>` : "";
+  return `<div class="why">${rows}${pen}<div class="why-total">Score final <b>${b.score}</b> = soma dos pontos${b.penalidade ? " − penalidade" : ""}</div>
     <div class="tags why-svcs">${svcs}</div></div>`;
+}
+
+const perfilBadge = (l) => (l.perfil === "fora" ? `<span class="vbadge bad" title="${esc(l.perfil_motivo || "fora do perfil")}">🚫 fora do perfil</span>` : "");
+const TRI = { sim: "Sim", nao: "Não", desconhecido: "Desconhecido" };
+const brl = (v) => (v == null ? "—" : v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 }));
+function perfilSection(l) {
+  const a = l.score_detalhe?.perfil;
+  if (!a) return "";
+  const d = a.dados;
+  const src = (u) => (safeUrl(u) ? ` <a class="muted" href="${esc(safeUrl(u))}" target="_blank" rel="noopener">fonte</a>` : "");
+  const tri = (k, x) => `<dt>${k}</dt><dd><b class="tri-${esc(x.status)}">${TRI[x.status] || "—"}</b>${x.evidencia ? ` · ${esc(x.evidencia)}` : ""}${src(x.fonte)}</dd>`;
+  const head = a.status === "fora"
+    ? `<div class="perfil-head fora">🚫 <b>Fora do perfil</b>${a.manual ? " (manual)" : ""}<ul>${a.motivos.map((m) => `<li>${esc(m)}</li>`).join("") || "<li>marcado manualmente</li>"}</ul></div>`
+    : `<div class="perfil-head dentro">🎯 <b>Dentro do perfil</b>${a.manual ? " (manual)" : ""}${a.excecao ? ` — exceção: ${esc(a.excecao)}` : ""}${a.alertas.length ? `<ul>${a.alertas.map((m) => `<li class="muted">⚠ ${esc(m)}</li>`).join("")}</ul>` : ""}</div>`;
+  return `${head}<dl class="cad">
+    <dt>Funcionários (est.)</dt><dd>${d.funcionarios != null ? `≈${esc(d.funcionarios)}` : "—"} <span class="vbadge ia">≈ IA</span></dd>
+    ${tri("TI interna", d.ti_interna)}${tri("Multinacional / grupo", d.multinacional)}${tri("Terceiriza TI", d.terceirizacao)}
+    <dt>Capital social</dt><dd>${brl(d.capital_social)}${d.capital_social != null ? ` <span class="vbadge ver">✓ Receita</span>` : ""}</dd>
+    <dt>Porte (Receita)</dt><dd>${esc(d.porte_receita || "—")}${d.matriz_filial ? ` · ${esc(d.matriz_filial)}` : ""}</dd>
+  </dl>
+  <div class="email-edit">
+    <input id="perfil-motivo" type="text" maxlength="200" placeholder="Motivo (opcional) para marcar manualmente" />
+    <button type="button" class="btn ghost small" data-perfil="dentro">🎯 Marcar dentro</button>
+    <button type="button" class="btn ghost small" data-perfil="fora">🚫 Marcar fora</button>
+    ${a.manual ? `<button type="button" class="btn ghost small" data-perfil="auto">↺ Automático</button>` : ""}
+  </div>`;
 }
 
 function locIa(d) {
@@ -345,6 +384,17 @@ $("#btn-signals").addEventListener("click", async (e) => {
   st.innerHTML = `<span class="spinner"></span>Agente buscando sinais de compra datados…`;
   try {
     const job = await runJob("/api/signals", { lead_ids: [] }, (m) => { st.innerHTML = `<span class="spinner"></span>${esc(m)}`; });
+    st.textContent = (job.status === "concluido" ? "✅ " : "❌ ") + job.message;
+    refresh();
+  } catch (err) { st.textContent = "❌ " + err.message; }
+  btn.disabled = false;
+});
+$("#btn-perfil").addEventListener("click", async (e) => {
+  const btn = e.currentTarget, st = $("#enrich-status");
+  btn.disabled = true; st.classList.remove("hidden");
+  st.innerHTML = `<span class="spinner"></span>Reavaliando o perfil dos leads (agente + Receita)…`;
+  try {
+    const job = await runJob("/api/perfil", { lead_ids: [] }, (m) => { st.innerHTML = `<span class="spinner"></span>${esc(m)}`; });
     st.textContent = (job.status === "concluido" ? "✅ " : "❌ ") + job.message;
     refresh();
   } catch (err) { st.textContent = "❌ " + err.message; }
@@ -422,10 +472,14 @@ function renderWeights(p) {
   };
   $("#w-fatores").innerHTML = Object.entries(wcfg.fatores).map(([k, l]) => slider("fatores", k, l, p.fatores[k])).join("");
   $("#w-servicos").innerHTML = Object.entries(wcfg.servicos).map(([k, v]) => slider("servicos", k, v.label, p.servicos[k])).join("");
+  $("#w-perfil").innerHTML = Object.entries(wcfg.perfil).map(([k, label]) => {
+    const [lo, hi] = wcfg.limites.perfil[k];
+    return `<label class="wrow"><span>${esc(label)}</span><input type="number" data-g="perfil" data-k="${k}" min="${lo}" max="${hi}" step="${k === "capital_max_mi" ? 0.1 : 1}" value="${p.perfil[k]}" /></label>`;
+  }).join("");
   updateWeightLabels();
 }
 function readWeights() {
-  const out = { servicos: {}, fatores: {} };
+  const out = { servicos: {}, fatores: {}, perfil: {} };
   wdlg.querySelectorAll("input[data-g]").forEach((i) => { out[i.dataset.g][i.dataset.k] = +i.value; });
   return out;
 }
@@ -438,6 +492,7 @@ function updateWeightLabels() {
 wdlg.addEventListener("input", (e) => { if (e.target.dataset.g) updateWeightLabels(); });
 $("#btn-weights").addEventListener("click", async () => {
   wcfg = await api("/api/config/pesos");
+  state.perfilCfg = wcfg.pesos.perfil;
   $("#weights-status").classList.add("hidden");
   renderWeights(wcfg.pesos); wdlg.showModal();
 });
@@ -448,7 +503,7 @@ $("#weights-form").addEventListener("submit", async (e) => {
   const st = $("#weights-status"); st.classList.remove("hidden");
   try {
     const r = await api("/api/config/pesos", { method: "PUT", body: readWeights() });
-    wcfg = r;
+    wcfg = r; state.perfilCfg = r.pesos.perfil;
     st.textContent = `✅ Pesos salvos. ${r.recalculados} lead(s) recalculados, ${r.alterados} mudaram de score.`;
     refresh();
   } catch (err) { st.textContent = "❌ " + err.message; }
@@ -458,7 +513,7 @@ $("#weights-form").addEventListener("submit", async (e) => {
 const fmtDate = (iso) => (iso ? new Date(iso + "T00:00").toLocaleDateString("pt-BR") : "");
 const stageLabel = (s) => state.meta.status_labels[s] || s;
 const stagePill = (s) => `<span class="pill stage st-${esc(s)}">${esc(stageLabel(s))}</span>`;
-const NOTA_ICON = { nota: "📝", etapa: "➜", acao: "📅", responsavel: "👤" };
+const NOTA_ICON = { nota: "📝", etapa: "➜", acao: "📅", responsavel: "👤", perfil: "🎯" };
 
 function crmSection(l) {
   const steps = state.meta.status.map((s) => `<button type="button" class="stage-step st-${s}${s === l.status ? " current" : ""}" data-stage="${s}">${esc(stageLabel(s))}</button>`).join("");
@@ -513,7 +568,7 @@ function renderKanban(leads) {
       <div class="kcards">${items.map((l) => `
         <article class="kcard${l.acao_vencida ? " late" : ""}" draggable="true" data-id="${l.id}">
           <div class="kc-top"><b>${esc(l.empresa)}</b><span class="kscore tier-${l.tier}">${l.score_final}</span></div>
-          <small class="muted">${esc(l.cidade)} · ${esc(l.segmento || "")}</small>
+          <small class="muted">${esc(l.cidade)} · ${esc(l.segmento || "")}</small>${perfilBadge(l)}
           ${l.responsavel ? `<small>👤 ${esc(l.responsavel)}</small>` : ""}
           ${l.proxima_acao || l.proxima_acao_data ? `<small class="${l.acao_vencida ? "overdue" : "muted"}">${l.acao_vencida ? "⏰" : "📅"} ${esc(l.proxima_acao || "")}${l.proxima_acao_data ? ` · ${fmtDate(l.proxima_acao_data)}` : ""}</small>` : ""}
         </article>`).join("") || `<p class="muted kempty">Arraste um lead para cá</p>`}</div>
@@ -546,4 +601,5 @@ $("#kanban").addEventListener("drop", async (e) => {
 });
 document.addEventListener("click", (e) => {
   if (e.target.closest("#kpi-vencidas")) { $("#f-acao").value = "vencida"; refresh(); }
+  if (e.target.closest("#kpi-fora")) { $("#f-perfil").value = "fora"; refresh(); }
 });

@@ -11,6 +11,17 @@ Barueri (São Paulo · 30 · 0.6), Guarulhos (São Paulo · 20 · 0.5), Santos (
 São José dos Campos (São Paulo · 95 · 1.3), Taubaté (São Paulo · 130 · 1.7), Ribeirão Preto (Itu · 270 · 3.3).
 Use sempre a base de **menor** tempo de carro.
 
+## Perfil de cliente ideal (ICP)
+O alvo são **empresas pequenas e médias, com cerca de 20 a 500 funcionários**, que provavelmente **não têm time de TI
+interno robusto** ou que **já terceirizam a TI** (total ou parcialmente). Essas empresas precisam de um parceiro para
+backup, segurança, rede, servidores, Microsoft 365 e suporte.
+**Não são o alvo:** grandes corporações, multinacionais e grandes grupos econômicos com TI própria estruturada (ex.: Toyota,
+Hyundai, grandes redes hospitalares, bancos, grandes varejistas). Os indícios de TI interna estruturada são CIO ou
+diretoria/gerência de TI, coordenação de infraestrutura, equipe com vários analistas, SOC/NOC ou data center próprios e
+vagas de liderança de TI. Só inclua uma empresa desse tipo se houver **sinal concreto e com fonte** de que ela terceiriza um
+serviço específico (ex.: edital/licitação de suporte N1, contrato de NOC terceirizado); nesse caso, descreva o sinal
+em `terceirizacao`. Vagas de analista de suporte N1/N2 numa PME são sinal de necessidade, não de TI robusta.
+
 ## Portfólio que você representa
 Use exclusivamente estas chaves em `servicos_recomendados`:
 - `acronis` – toda a gama Acronis: backup, disaster recovery, proteção de endpoints, cibersegurança, e-mail security, gestão de patches.
@@ -33,14 +44,20 @@ Use exclusivamente estas chaves em `servicos_recomendados`:
    vagas abertas para TI/infra/suporte, expansão (novas filiais, fábricas, contratações), incidentes de segurança/ransomware divulgados,
    migração para nuvem, uso de sistemas legados, crescimento de quadro, setores regulados (LGPD, saúde, indústria, logística, educação),
    ausência de equipe interna de TI, notícias de investimento, licitações e fusões.
-2. Avalie porte (`pequena`, `media`, `grande`), segmento e as necessidades prováveis (em `necessidades`, descreva cada
+2. Avalie o porte (`pequena`, `media`, `grande`) e informe `funcionarios_estimados` (número aproximado no Brasil, a partir
+   do LinkedIn da empresa, site, notícias ou econodata; `null` se não houver base). Preencha também:
+   - `ti_interna`: `status` (`sim`/`nao`/`desconhecido`), `evidencia` (ex.: "vaga de Gerente de TI no LinkedIn") e `fonte` (URL);
+   - `multinacional`: `status` (`sim`/`nao`/`desconhecido`), `grupo` (nome do grupo controlador, se houver) e `fonte`;
+   - `terceirizacao`: `status`, `evidencia` e `fonte` de sinais de que a empresa terceiriza TI ou um serviço de TI.
+   Use `desconhecido` quando não houver evidência. **Descarte empresas fora do perfil de cliente ideal.** Avalie também o
+   segmento e as necessidades prováveis (em `necessidades`, descreva cada
    necessidade em texto livre, ex.: "Backup imutável dos servidores do ERP" — não repita as chaves de serviço).
    Informe a localização: `cidade` (nome real do município), `uf`, `base_proxima` (Itu, Sorocaba ou São Paulo — a de menor tempo
    de carro), `distancia_km` e `tempo_viagem_h` (estimativa por rodovia, em horas decimais, ex.: 1.5). **Descarte empresas
    a mais de 3,5 h de carro de todas as bases** ou o limite menor pedido pelo usuário.
 3. Relacione cada necessidade aos serviços do portfólio e justifique de forma objetiva.
 4. Atribua `score_oportunidade` de 0 a 100 considerando: aderência ao portfólio (40%), força/recência dos sinais (30%),
-   porte e potencial de contrato recorrente (20%) e proximidade da base mais próxima (10%: até 1 h = máximo, 3,5 h = mínimo).
+   aderência ao perfil de cliente ideal: PME de 20 a 500 funcionários sem TI interna robusta (20%) e proximidade da base mais próxima (10%: até 1 h = máximo, 3,5 h = mínimo).
 5. **Nunca invente empresas, CNPJs, URLs ou contatos.** Se não tiver certeza de um dado, use `null` e reduza `nivel_confianca`.
    Cada lead deve ser **uma empresa específica e identificável** (razão social ou nome fantasia). Nunca retorne setores ou grupos
    genéricos (ex.: "Empresas de varejo em São Paulo"); prefira devolver menos leads a devolver leads genéricos.
@@ -93,6 +110,9 @@ Responda **somente** com um único objeto JSON válido (sem texto antes ou depoi
       "segmento": "string",
       "porte": "pequena | media | grande",
       "funcionarios_estimados": 0,
+      "ti_interna": {"status": "sim | nao | desconhecido", "evidencia": "string ou null", "fonte": "url ou null"},
+      "multinacional": {"status": "sim | nao | desconhecido", "grupo": "string ou null", "fonte": "url ou null"},
+      "terceirizacao": {"status": "sim | nao | desconhecido", "evidencia": "string ou null", "fonte": "url ou null"},
       "necessidades": ["string"],
       "sinais": [{"tipo": "vaga_ti | expansao | incidente | troca_sistema | noticia", "descricao": "string", "data": "AAAA-MM-DD", "fonte": "url"}],
       "servicos_recomendados": ["acronis", "modern_work"],

@@ -31,7 +31,7 @@ flowchart LR
 ## Agente no Foundry
 
 - **Projeto:** `https://foundry-hackbr-ghcp.services.ai.azure.com/api/projects/prj-foundry-HackBR-GHCP-24`
-- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 9 (`prospector-ti-itu-sorocaba-sp:9`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
+- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 10 (`prospector-ti-itu-sorocaba-sp:10`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
 - **Região:** qualquer cidade a até 3,5 h de carro da base mais próxima (Itu, Sorocaba ou São Paulo). O agente informa a cidade
   real, `base_proxima`, `distancia_km` e `tempo_viagem_h` (estimativas por rodovia). O backend descarta leads acima do limite pedido.
 - **Modelo:** deployment `gpt-4o`, o único deployment de chat disponível no projeto.
@@ -154,10 +154,11 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
 | Avaliação do agente (IA) | 50 | `score_oportunidade` ÷ 100 |
 | Aderência aos serviços | 15 | soma dos pesos dos serviços recomendados ÷ 3 (máx. 1) |
 | Sinais de compra | 12 | força dos sinais (abaixo) |
-| Porte | 8 | grande 1,0 · média 0,8 · pequena 0,5 |
+| Porte | 8 | média 1,0 · pequena 0,8 · grande 0,2 (com funcionários estimados: 1,0 dentro da faixa do perfil, menos fora dela) |
 | Distância até a base | 6 | 1,0 na base, caindo até 0,3 com 3,5 h de carro (0,5 se desconhecida) |
 | E-mail disponível | 5 | encontrado na fonte ou manual 1,0 · inferido 0,5 · sem e-mail 0 |
 | Confiança dos dados | 4 | alta 1,0 · média 0,7 · baixa 0,4 |
+| Perfil de cliente ideal | 15 | dentro do perfil 0,6–1,0 (mais dados conhecidos = maior) · exceção por terceirização 0,4 · fora 0 |
 
 Cada serviço tem um peso de 0 a 3 (padrão 1): Acronis, Modern Work/serviços gerenciados, residentes N1/N2, banco de dados,
 redes/Fortigate, Windows Server/AD e infraestrutura cabeada. Faixas: **quente** ≥ 75, **morno** ≥ 55, **frio** < 55.
@@ -168,6 +169,36 @@ redes/Fortigate, Windows Server/AD e infraestrutura cabeada. Faixas: **quente** 
 - No detalhe do lead, **Por que este score?** mostra a decomposição: cada fator com o valor, o motivo (por exemplo, "1h05 de
   carro até Itu" ou "7 sinais, 5 datados com fonte"), os pontos obtidos e o máximo possível, além dos serviços que contaram
   para a aderência.
+
+### Perfil de cliente ideal (ICP)
+
+O alvo são **PMEs de cerca de 20 a 500 funcionários** sem time de TI interno robusto, ou que já terceirizam TI. Grandes
+corporações, multinacionais e grupos com TI própria (por exemplo, Toyota, Hyundai e grandes redes hospitalares) ficam
+**fora do perfil**. Eles não são apagados: ficam ocultos por padrão e perdem uma **penalidade** de 60% do score.
+
+Um lead fica **fora do perfil** quando ocorre qualquer uma destas condições:
+- os funcionários estimados estão fora da faixa;
+- o porte é "grande" e não há estimativa de funcionários;
+- o agente indica TI interna estruturada, com evidência forte (gerência ou diretoria de TI, CIO, coordenação, equipe ou SOC
+  próprio). Uma vaga isolada de analista ou suporte gera só um alerta;
+- é um grupo multinacional;
+- o capital social na Receita é ≥ R$ 50 mi.
+
+FILIAL, sócio no exterior e porte "DEMAIS" sem número de funcionários geram apenas alertas. **Exceção:** quando há sinal
+concreto de terceirização com URL de fonte, o lead permanece no perfil (valor 0,4).
+
+- O agente (v10) devolve `funcionarios_estimados`, `ti_interna`, `multinacional` e `terceirizacao`. Cada campo traz
+  `status` (sim/nao/desconhecido), evidência e fonte. A verificação de CNPJ acrescenta `capital_social` e sócios no exterior
+  (QSA).
+- A faixa de funcionários, o capital máximo e a penalidade (%) são ajustáveis em **⚙ Pesos → Perfil de cliente ideal**.
+- O filtro **Perfil** do ranking tem três opções: no perfil (padrão), fora do perfil e todos. O KPI "Fora do perfil
+  (ocultos)" é clicável.
+- No detalhe do lead, a seção de perfil mostra os motivos, os alertas e as evidências com fonte, além dos botões **Marcar
+  dentro**, **Marcar fora** e **Automático**. Essa sobreposição manual fica registrada no histórico.
+- **Por que este score?** mostra o fator de perfil e a penalidade aplicada.
+- **🎯 Reavaliar perfil** consulta o agente e atualiza o CNPJ (incluindo o capital social) de todos os leads reais. Os dados de
+  CRM são preservados.
+- Os KPIs consideram apenas os leads no perfil.
 
 **Força dos sinais** (0–1) = Σ(peso do tipo × fator) ÷ 1,2, limitada a 1. Pesos por tipo: expansão 1,0; incidente 1,0; troca de
 sistemas 0,9; vaga de TI 0,8; notícia 0,6; indício sem evidência 0,3. O fator decai com a idade (meia-vida de 180 dias:
@@ -181,15 +212,16 @@ Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{token}` |
-| GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status` (etapa), `min_score`, `q`, `com_email` (true/false), `responsavel`, `acao` (`vencida`/`agendada`) |
-| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo`, `forca_sinais` e `score_detalhe` com a decomposição do score) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove), `responsavel`, `proxima_acao` e `proxima_acao_data` (AAAA-MM-DD; `""` remove) |
+| GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status` (etapa), `min_score`, `q`, `com_email` (true/false), `responsavel`, `acao` (`vencida`/`agendada`), `perfil` (`dentro` padrão / `fora` / `todos`) |
+| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo`, `forca_sinais` e `score_detalhe` com a decomposição do score) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove), `responsavel`, `proxima_acao` e `proxima_acao_data` (AAAA-MM-DD; `""` remove), `perfil` (`dentro`/`fora`/`auto`) com `perfil_motivo` |
 | POST | `/api/leads/{id}/notas` | `{texto}` → nota no histórico do lead (o histórico vem em `notas` no GET do lead) |
-| GET / PUT | `/api/config/pesos` | Pesos do ranking (`{servicos: {acronis: 1, ...}, fatores: {agente: 50, ...}}`); o PUT valida, salva e recalcula todos os scores |
+| GET / PUT | `/api/config/pesos` | Pesos do ranking (`{servicos: {acronis: 1, ...}, fatores: {agente: 50, ...}, perfil: {func_min: 20, func_max: 500, capital_max_mi: 50, penalidade: 60}}`); o PUT valida, salva e recalcula todos os scores |
 | GET | `/api/stats`, `/api/meta` | KPIs e metadados |
 | POST | `/api/collect` | `{bases, max_horas, cidades, servicos, segmento, quantidade, modo}` → `{job_id}` |
 | POST | `/api/enrich` | `{lead_ids?, modo?}` → `{job_id}`. Busca e-mails via agente (sem `lead_ids`: todos os leads sem e-mail) |
 | POST | `/api/verify` | `{lead_ids?, todos?, buscar_cnpj?}` → `{job_id}`. Verifica CNPJ e rota (sem `lead_ids`: leads reais pendentes; `todos=true` reverifica todos) |
 | POST | `/api/signals` | `{lead_ids?, modo?}` → `{job_id}`. Busca sinais de compra datados via agente (sem `lead_ids`: leads reais sem sinal datado com fonte) |
+| POST | `/api/perfil` | `{lead_ids?, modo?}` → `{job_id}`. Reavalia o perfil de cliente ideal via agente + CNPJ (sem `lead_ids`: todos os leads reais) |
 | GET | `/api/jobs/{id}` | Status da coleta / do enriquecimento / da verificação |
 
 ## Observações

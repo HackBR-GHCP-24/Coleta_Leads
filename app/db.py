@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from . import config, emails, scoring, sinais as sinais_mod
 from .auth import hash_password, verify_password
+from . import perfil as perfil_mod
 from .scoring import final_score, tier, travel_hours
 
 SCHEMA = """
@@ -130,7 +131,7 @@ def _migrate(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE leads ADD COLUMN email TEXT")
     if "email_tipo" not in cols:
         c.execute("ALTER TABLE leads ADD COLUMN email_tipo TEXT")
-    for col in ("responsavel", "proxima_acao", "proxima_acao_data"):
+    for col in ("responsavel", "proxima_acao", "proxima_acao_data", "perfil", "perfil_motivo"):
         if col not in cols:
             c.execute(f"ALTER TABLE leads ADD COLUMN {col} TEXT")
     for antigo, novo in _STATUS_MIGRA.items():  # etapas antigas → pipeline novo
@@ -173,9 +174,11 @@ def _signals(c: sqlite3.Connection, lead_id: int) -> list[dict]:
 
 
 def _rescore(c: sqlite3.Connection, lead_id: int, data: dict) -> int:
-    score = final_score(data, _signals(c, lead_id))
-    c.execute("UPDATE leads SET score_final=? WHERE id=?", (score, lead_id))
-    return score
+    b = scoring.breakdown(data, _signals(c, lead_id))
+    av = b["perfil"]
+    c.execute("UPDATE leads SET score_final=?, perfil=?, perfil_motivo=? WHERE id=?",
+              (b["score"], av["status"], perfil_mod.resumo(av), lead_id))
+    return b["score"]
 
 
 def _recompute(c: sqlite3.Connection) -> None:
@@ -248,6 +251,12 @@ def upsert_leads(leads: list[dict], origem: str) -> tuple[int, int]:
                 if rota:  # mantém a rota verificada; o novo valor da IA fica como estimativa
                     lead["estimativa_ia"] = {k: lead.get(k) for k in ("base_proxima", "distancia_km", "tempo_viagem_h")}
                     lead["base_proxima"], lead["distancia_km"], lead["tempo_viagem_h"] = rota["base"], rota["distancia_km"], rota["tempo_h"]
+            for k in ("perfil_manual", "perfil_avaliado_em"):  # classificação manual do perfil
+                if old.get(k) and not lead.get(k):
+                    lead[k] = old[k]
+            for k in ("ti_interna", "multinacional", "terceirizacao", "grupo_economico"):
+                if old.get(k) and not lead.get(k):
+                    lead[k] = old[k]
             # mantém e-mails já conhecidos (inclusive os informados manualmente) ao atualizar o lead
             contacts = emails.normalize(list(emails.normalize(lead.get("contatos_email"))) + list(old_contacts or []))
             lead["contatos_email"] = contacts
@@ -371,6 +380,9 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
         "acao_vencida": bool(row["proxima_acao_data"] and row["proxima_acao_data"] < _today()
                              and row["status"] not in ("ganho", "perdido")),
         "origem": row["origem"],
+        "perfil": row["perfil"] or "dentro",
+        "perfil_motivo": row["perfil_motivo"],
+        "funcionarios_estimados": data.get("funcionarios_estimados"),
         "nivel_confianca": data.get("nivel_confianca"),
         "necessidades": data.get("necessidades") or [],
         "base_proxima": data.get("base_proxima") or (row["cidade"] if travel_hours(data) == 0 else None),
@@ -391,9 +403,13 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
 
 
 def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None, base=None, max_horas=None,
-               com_email=None, responsavel=None, acao=None) -> list[dict]:
+               com_email=None, responsavel=None, acao=None, perfil=None) -> list[dict]:
     sql = "SELECT * FROM leads WHERE score_final >= ?"
     args: list = [min_score]
+    if perfil == "fora":
+        sql += " AND perfil = 'fora'"
+    elif perfil == "dentro":
+        sql += " AND COALESCE(perfil, 'dentro') != 'fora'"
     if responsavel:
         sql += " AND responsavel = ?"
         args.append(responsavel)
@@ -487,6 +503,32 @@ def set_crm(lead_id: int, fields: dict, autor: str | None = None) -> None:
                 _log(c, lead_id, "acao", f"Data da próxima ação: {data}", autor)
 
 
+def set_perfil_manual(lead_id: int, status: str, motivo: str | None, autor: str | None) -> None:
+    """status dentro|fora força a classificação; "auto" volta à avaliação automática. Registra no histórico."""
+    with conn() as c:
+        row = c.execute("SELECT data FROM leads WHERE id=?", (lead_id,)).fetchone()
+        data = json.loads(row["data"])
+        if status == "auto":
+            data.pop("perfil_manual", None)
+            texto = "Perfil: avaliação automática"
+        else:
+            data["perfil_manual"] = {"status": status, "motivo": motivo or None, "autor": autor, "em": _now()}
+            texto = f"Perfil marcado manualmente: {'dentro' if status == 'dentro' else 'fora'} do perfil" + (
+                f" ({motivo})" if motivo else "")
+        c.execute("UPDATE leads SET data=?, updated_at=? WHERE id=?", (json.dumps(data, ensure_ascii=False), _now(), lead_id))
+        _log(c, lead_id, "perfil", texto, autor)
+        _rescore(c, lead_id, data)
+
+
+def leads_for_profile(ids: list[int] | None = None) -> list[dict]:
+    with conn() as c:
+        if ids:
+            rows = c.execute(f"SELECT * FROM leads WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM leads WHERE origem != 'demo' ORDER BY score_final DESC").fetchall()
+    return [_row_to_lead(r, full=True) for r in rows]
+
+
 def add_note(lead_id: int, texto: str, autor: str | None) -> dict:
     with conn() as c:
         _log(c, lead_id, "nota", texto, autor)
@@ -500,17 +542,20 @@ def responsaveis() -> list[str]:
 
 
 def stats() -> dict:
+    """KPIs dos leads dentro do perfil (os fora do perfil ficam ocultos por padrão e são só contados)."""
     with conn() as c:
-        total = c.execute("SELECT COUNT(*) n, COALESCE(AVG(score_final),0) avg FROM leads").fetchone()
-        quentes = c.execute("SELECT COUNT(*) FROM leads WHERE score_final >= 75").fetchone()[0]
-        com_email = c.execute("SELECT COUNT(*) FROM leads WHERE email IS NOT NULL").fetchone()[0]
-        vencidas = c.execute("SELECT COUNT(*) FROM leads WHERE proxima_acao_data < ? AND status NOT IN ('ganho','perdido')",
+        fora = c.execute("SELECT COUNT(*) FROM leads WHERE perfil = 'fora'").fetchone()[0]
+        c.execute("CREATE TEMP VIEW IF NOT EXISTS lp AS SELECT * FROM leads WHERE COALESCE(perfil, 'dentro') != 'fora'")
+        total = c.execute("SELECT COUNT(*) n, COALESCE(AVG(score_final),0) avg FROM lp").fetchone()
+        quentes = c.execute("SELECT COUNT(*) FROM lp WHERE score_final >= 75").fetchone()[0]
+        com_email = c.execute("SELECT COUNT(*) FROM lp WHERE email IS NOT NULL").fetchone()[0]
+        vencidas = c.execute("SELECT COUNT(*) FROM lp WHERE proxima_acao_data < ? AND status NOT IN ('ganho','perdido')",
                              (_today(),)).fetchone()[0]
-        agendadas = c.execute("SELECT COUNT(*) FROM leads WHERE proxima_acao_data IS NOT NULL AND status NOT IN ('ganho','perdido')").fetchone()[0]
-        por_cidade = {r[0]: r[1] for r in c.execute("SELECT cidade, COUNT(*) FROM leads GROUP BY cidade")}
-        por_status = {r[0]: r[1] for r in c.execute("SELECT status, COUNT(*) FROM leads GROUP BY status")}
+        agendadas = c.execute("SELECT COUNT(*) FROM lp WHERE proxima_acao_data IS NOT NULL AND status NOT IN ('ganho','perdido')").fetchone()[0]
+        por_cidade = {r[0]: r[1] for r in c.execute("SELECT cidade, COUNT(*) FROM lp GROUP BY cidade")}
+        por_status = {r[0]: r[1] for r in c.execute("SELECT status, COUNT(*) FROM lp GROUP BY status")}
         servicos: dict[str, int] = {}
-        for (s,) in c.execute("SELECT servicos FROM leads"):
+        for (s,) in c.execute("SELECT servicos FROM lp"):
             for k in json.loads(s or "[]"):
                 servicos[k] = servicos.get(k, 0) + 1
         ultima = c.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT 1").fetchone()
@@ -525,6 +570,7 @@ def stats() -> dict:
         "por_status": por_status,
         "por_servico": servicos,
         "ultima_coleta": dict(ultima) if ultima else None,
+        "fora_do_perfil": fora,
     }
 
 

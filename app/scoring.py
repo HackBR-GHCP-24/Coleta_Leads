@@ -2,16 +2,18 @@
 
 score_final = Σ (peso do fator × valor do fator 0–1) ÷ Σ pesos × 100. Fatores: avaliação do agente, aderência aos serviços
 (ponderada pelo peso de cada serviço), sinais de compra (tipo e idade, ver app/sinais.py), porte, distância até a base mais
-próxima, e-mail disponível e confiança. Os pesos ficam na tabela settings e podem ser alterados na tela de configuração.
+próxima, e-mail disponível, confiança e aderência ao perfil de cliente ideal (PME sem TI interna, ver app/perfil.py).
+Leads fora do perfil perdem um percentual configurável do score (penalidade). Os pesos ficam na tabela settings e podem ser alterados na tela de configuração.
 """
 from __future__ import annotations
 
 import copy
 
+from . import perfil as perfil_mod
 from . import sinais as sinais_mod
 from .config import SERVICES
 
-_PORTE = {"grande": 1.0, "media": 0.8, "média": 0.8, "pequena": 0.5}
+_PORTE = {"media": 1.0, "média": 1.0, "pequena": 0.8, "grande": 0.2}  # foco em PMEs
 _BASES = {"itu", "sorocaba", "são paulo", "sao paulo"}
 _CONFIANCA = {"alta": 1.0, "media": 0.7, "média": 0.7, "baixa": 0.4}
 _EMAIL = {"encontrado": 1.0, "manual": 1.0, "inferido": 0.5}
@@ -34,13 +36,16 @@ FACTORS = {
     "distancia": "Distância até a base",
     "email": "E-mail disponível",
     "confianca": "Confiança dos dados",
+    "perfil": "Perfil de cliente ideal (PME sem TI interna)",
 }
 ADERENCIA_SATURACAO = 3.0  # soma dos pesos dos serviços aderentes que vale 100%
 DEFAULT_WEIGHTS = {
     "servicos": {k: 1.0 for k in SERVICE_GROUPS},
-    "fatores": {"agente": 50, "aderencia": 15, "sinais": 12, "porte": 8, "distancia": 6, "email": 5, "confianca": 4},
+    "fatores": {"agente": 50, "aderencia": 15, "sinais": 12, "porte": 8, "distancia": 6, "email": 5, "confianca": 4,
+                "perfil": 15},
+    "perfil": dict(perfil_mod.DEFAULT),
 }
-LIMITES = {"servicos": (0.0, 3.0), "fatores": (0.0, 100.0)}
+LIMITES = {"servicos": (0.0, 3.0), "fatores": (0.0, 100.0), "perfil": perfil_mod.LIMITES}
 _weights = copy.deepcopy(DEFAULT_WEIGHTS)
 
 
@@ -51,14 +56,17 @@ def get_weights() -> dict:
 def validate_weights(w: dict) -> dict:
     """Completa com os padrões e valida os limites. Lança ValueError em caso de valor inválido."""
     out = copy.deepcopy(DEFAULT_WEIGHTS)
-    for grupo, (lo, hi) in LIMITES.items():
+    for grupo, lim in LIMITES.items():
         for k, v in ((w or {}).get(grupo) or {}).items():
             if k not in out[grupo]:
                 raise ValueError(f"Peso desconhecido: {grupo}.{k}")
+            lo, hi = lim[k] if isinstance(lim, dict) else lim
             v = float(v)
             if not lo <= v <= hi:
                 raise ValueError(f"{grupo}.{k} deve estar entre {lo:g} e {hi:g}")
             out[grupo][k] = round(v, 2)
+    if out["perfil"]["func_min"] >= out["perfil"]["func_max"]:
+        raise ValueError("O mínimo de funcionários deve ser menor que o máximo")
     if not any(out["fatores"].values()):
         raise ValueError("Pelo menos um fator precisa ter peso maior que zero")
     return out
@@ -113,6 +121,21 @@ def breakdown(lead: dict, sinais: list[dict] | None = None, weights: dict | None
     except (TypeError, ValueError):
         agente = 0.0
     porte = str(lead.get("porte") or "").lower()
+    pcfg = w.get("perfil") or perfil_mod.DEFAULT
+    av = perfil_mod.avaliar(lead, pcfg)
+    funcs = av["dados"]["funcionarios"]
+    if funcs is not None:
+        porte_val = 1.0 if pcfg["func_min"] <= funcs <= pcfg["func_max"] else 0.2
+        porte_txt = f"{porte or 'porte'} · ≈{funcs} funcionários ({'dentro' if porte_val == 1 else 'fora'} da faixa {pcfg['func_min']:g}–{pcfg['func_max']:g})"
+    else:
+        porte_val, porte_txt = _PORTE.get(porte, 0.6), (porte or "porte não informado") + " (sem estimativa de funcionários)"
+    if av["status"] == "fora":
+        perfil_txt = "fora do perfil: " + "; ".join(av["motivos"] or ["marcado manualmente"])
+    elif av["excecao"]:
+        perfil_txt = "exceção — " + av["excecao"]
+    else:
+        perfil_txt = "dentro do perfil" + (" (manual)" if av["manual"] else "") + (
+            " · " + "; ".join(av["alertas"]) if av["alertas"] else "")
     h = travel_hours(lead)
     contatos = lead.get("contatos_email") or []
     email_tipo = contatos[0].get("tipo") if contatos and isinstance(contatos[0], dict) else None
@@ -125,11 +148,12 @@ def breakdown(lead: dict, sinais: list[dict] | None = None, weights: dict | None
         "aderencia": (aderencia, ", ".join(f"{s['label']} ×{s['peso']:g}" for s in servicos if s["recomendado"])
                       or "nenhum serviço do portfólio recomendado"),
         "sinais": (sinais_mod.strength(sinais), f"{len(sinais)} sinal(is), {datados} datado(s) com fonte"),
-        "porte": (_PORTE.get(porte, 0.6), porte or "porte não informado"),
+        "porte": (porte_val, porte_txt),
         "distancia": (proximity(lead), "não informada" if h is None else "na base" if h == 0 else f"{_fmt_h(h)} de carro até {base}"),
         "email": (_EMAIL.get(email_tipo, 0.0), {"encontrado": "e-mail encontrado na fonte", "manual": "e-mail informado manualmente",
                                                 "inferido": "e-mail inferido (meio ponto)"}.get(email_tipo, "sem e-mail")),
         "confianca": (_CONFIANCA.get(confianca, 0.6), confianca or "não informada"),
+        "perfil": (av["valor"], perfil_txt),
     }
     total = sum(w["fatores"].values()) or 1
     fatores = []
@@ -138,8 +162,13 @@ def breakdown(lead: dict, sinais: list[dict] | None = None, weights: dict | None
         peso = w["fatores"][k]
         fatores.append({"id": k, "label": label, "peso": peso, "peso_pct": round(100 * peso / total, 1),
                         "valor": round(valor, 3), "pontos": round(100 * valor * peso / total, 1), "detalhe": detalhe})
-    score = round(sum(100 * valores[k][0] * w["fatores"][k] / total for k in FACTORS))
-    return {"score": score, "fatores": fatores, "servicos": servicos}
+    bruto = sum(100 * valores[k][0] * w["fatores"][k] / total for k in FACTORS)
+    penalidade = None
+    if av["status"] == "fora":
+        pct = pcfg["penalidade"]
+        penalidade = {"pct": pct, "pontos": round(bruto * pct / 100, 1), "motivos": av["motivos"] or ["marcado manualmente"]}
+        bruto -= bruto * pct / 100
+    return {"score": round(bruto), "fatores": fatores, "servicos": servicos, "penalidade": penalidade, "perfil": av}
 
 
 def final_score(lead: dict, sinais: list[dict] | None = None) -> int:

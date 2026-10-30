@@ -267,3 +267,14 @@ td small.resp { display: block; margin-top: 4px; }
   .kanban { grid-auto-columns: 82%; }
   .view-toggle { margin-left: 0; }
 }
+
+/* Perfil de cliente ideal */
+.perfil-head { border-radius: 10px; padding: 10px 12px; margin: 6px 0 10px; }
+.perfil-head ul { margin: 6px 0 0 18px; padding: 0; }
+.perfil-head.fora { background: rgba(255, 107, 107, .12); border: 1px solid rgba(255, 107, 107, .4); }
+.perfil-head.dentro { background: rgba(46, 204, 113, .1); border: 1px solid rgba(46, 204, 113, .35); }
+.tri-sim { color: #ff6b6b; } .tri-nao { color: var(--ok); } .tri-desconhecido { color: var(--muted, #9aa4b2); }
+.why-pen .why-bar i { background: #ff6b6b; }
+.why-pen .why-pts b { color: #ff6b6b; }
+.perfil-cfg input[type=number] { width: 110px; justify-self: end; }
+.kcard .vbadge { align-self: flex-start; }

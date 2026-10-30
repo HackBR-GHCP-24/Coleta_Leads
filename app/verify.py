@@ -81,6 +81,13 @@ def fmt_cnpj(d: str) -> str:
     return f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}"
 
 
+def _money(v) -> float | None:
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _brasilapi(cnpj: str) -> dict:
     d = _get("brasilapi", f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}")
     end = " ".join(x for x in [d.get("descricao_tipo_de_logradouro"), d.get("logradouro")] if x)
@@ -92,6 +99,9 @@ def _brasilapi(cnpj: str) -> dict:
         "porte": d.get("porte"),
         "situacao": d.get("descricao_situacao_cadastral"),
         "matriz_filial": d.get("descricao_identificador_matriz_filial"),
+        "capital_social": _money(d.get("capital_social")),
+        "socio_exterior": any(str(q.get("codigo_pais") or "") not in ("", "105", "None") or
+                              "exterior" in str(q.get("qualificacao_socio") or "").lower() for q in d.get("qsa") or []),
         "endereco": " ".join(x for x in [end, d.get("numero"), "-", d.get("bairro")] if x).strip(" -"),
         "cep": d.get("cep"),
         "municipio": (d.get("municipio") or "").title() or None,
@@ -117,6 +127,9 @@ def _receitaws(cnpj: str) -> dict:
         "porte": d.get("porte"),
         "situacao": d.get("situacao"),
         "matriz_filial": d.get("tipo"),
+        "capital_social": _money(d.get("capital_social")),
+        "socio_exterior": any("exterior" in str(q.get("qual") or "").lower() or q.get("pais_origem")
+                              for q in d.get("qsa") or []),
         "endereco": " ".join(x for x in [d.get("logradouro"), d.get("numero"), "-", d.get("bairro")] if x).strip(" -"),
         "cep": re.sub(r"\D", "", d.get("cep") or "") or None,
         "municipio": (d.get("municipio") or "").title() or None,
@@ -137,7 +150,7 @@ def lookup_cnpj(cnpj: str) -> dict | None:
                 log.warning("%s falhou para %s: %s", fn.__name__, cnpj, exc)
         return None
 
-    data = _cache("cnpj", cnpj, fetch)
+    data = _cache("cnpj2", cnpj, fetch)  # v2: inclui capital social e sócios no exterior
     if data:
         data = {**data, "cnpj": fmt_cnpj(cnpj)}
     return data

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import config, emails, verify
+from . import config, emails, perfil, scoring, verify
 from .config import SERVICES
 
 _openai = None
@@ -32,6 +32,15 @@ def build_prompt(bases: list[str], services: list[str], segment: str | None, qua
         f"Encontre {quantity} empresas (clientes finais, NÃO empresas de TI/MSPs/integradores) com potencial de "
         f"contratar um parceiro de TI, localizadas a até {max_hours:g} horas de carro de {', '.join(bases)} (SP).",
     ]
+    p = scoring.get_weights().get("perfil") or perfil.DEFAULT
+    parts.append(
+        f"PERFIL DE CLIENTE IDEAL: empresas pequenas e médias com cerca de {p['func_min']:g} a {p['func_max']:g} funcionários, "
+        "sem time de TI interno robusto (ou que já terceirizam TI). NÃO traga grandes corporações, multinacionais nem "
+        "grupos com TI própria estruturada (CIO, diretoria/gerência de TI, SOC próprio), salvo sinal concreto e com fonte de "
+        "terceirização de um serviço específico. Para cada empresa informe funcionarios_estimados, ti_interna, multinacional "
+        "e terceirizacao com evidência e URL da fonte. Antes de responder, descarte e substitua qualquer candidata com mais "
+        f"de {p['func_max']:g} funcionários, capital social muito alto, rede/grupo nacional grande ou controle estrangeiro; "
+        "priorize indústrias, distribuidoras, escritórios, clínicas, escolas e comércios regionais de porte médio.")
     if cities:
         parts.append(f"Concentre a busca nestas cidades: {', '.join(cities)}.")
     else:
@@ -202,6 +211,44 @@ def find_cnpj(lead: dict) -> dict:
     cnpj = verify.clean_cnpj(item.get("cnpj"))
     fonte = item.get("cnpj_fonte") if str(item.get("cnpj_fonte") or "").startswith("http") else None
     return {"cnpj": verify.fmt_cnpj(cnpj), "cnpj_fonte": fonte} if cnpj else {}
+
+
+def _first_item(text: str) -> dict:
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.S)
+    data = json.loads(fenced.group(1) if fenced else text[text.find("{"): text.rfind("}") + 1])
+    return (data.get("leads") or [data])[0] if isinstance(data, dict) else {}
+
+
+def find_profile(lead: dict) -> dict:
+    """Pede ao agente a avaliação de perfil (funcionários, TI interna, multinacional, terceirização) de um lead existente."""
+    d = lead.get("detalhes") or lead
+    prompt = (
+        "TAREFA DE AVALIAÇÃO DE PERFIL (não faça prospecção nova). Pesquise na web a empresa "
+        f"\"{lead.get('empresa')}\" em {lead.get('cidade') or 's/ cidade'}/{d.get('uf') or 'SP'} (site: {d.get('site') or 'desconhecido'}"
+        f"{', CNPJ ' + d['cnpj'] if d.get('cnpj') else ''}) e responda: (1) número aproximado de funcionários no Brasil "
+        "(LinkedIn da empresa, site, notícias, RAIS/econodata); (2) se tem TI interna estruturada — evidências: vagas ou "
+        "perfis de CIO/diretor/gerente de TI, coordenador de infraestrutura, equipe de TI com vários analistas, SOC/NOC "
+        "próprio, data center próprio; (3) se pertence a grupo multinacional ou grande grupo econômico; (4) se há sinal "
+        "concreto de que terceiriza TI ou um serviço de TI específico. Retorne SOMENTE JSON "
+        '{"leads":[{"empresa":"...","funcionarios_estimados":0,"porte":"pequena|media|grande",'
+        '"ti_interna":{"status":"sim|nao|desconhecido","evidencia":"...","fonte":"URL ou null"},'
+        '"multinacional":{"status":"sim|nao|desconhecido","grupo":"nome do grupo ou null","fonte":"URL ou null"},'
+        '"terceirizacao":{"status":"sim|nao|desconhecido","evidencia":"...","fonte":"URL ou null"}}]}. '
+        "Use \"desconhecido\" quando não houver evidência; nunca invente fontes."
+    )
+    response = _get_openai().responses.create(
+        input=prompt,
+        extra_body={"agent_reference": {"name": config.FOUNDRY_AGENT_NAME, "type": "agent_reference"}},
+        timeout=240,
+    )
+    try:
+        item = _first_item(response.output_text or "")
+    except (ValueError, IndexError, AttributeError):
+        return {}
+    out = {k: item[k] for k in ("funcionarios_estimados", "ti_interna", "multinacional", "terceirizacao") if item.get(k) is not None}
+    if item.get("porte") in ("pequena", "media", "grande"):
+        out["porte"] = item["porte"]
+    return out
 
 
 def find_signals(lead: dict) -> list[dict]:

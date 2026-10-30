@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config, db, emails, mock_data, scoring, sinais as sinais_mod, verify
+from . import perfil as perfil_mod
 from .auth import create_token, current_user
 
 log = logging.getLogger("coleta_leads")
@@ -41,6 +42,8 @@ class StatusIn(BaseModel):
     responsavel: str | None = Field(default=None, max_length=80)  # "" remove
     proxima_acao: str | None = Field(default=None, max_length=300)  # "" remove
     proxima_acao_data: str | None = None  # AAAA-MM-DD; "" remove
+    perfil: str | None = None  # dentro | fora (classificação manual) | auto
+    perfil_motivo: str | None = Field(default=None, max_length=200)
 
 
 class NotaIn(BaseModel):
@@ -56,6 +59,7 @@ class VerifyIn(BaseModel):
 class PesosIn(BaseModel):
     servicos: dict[str, float] = Field(default_factory=dict)
     fatores: dict[str, float] = Field(default_factory=dict)
+    perfil: dict[str, float] = Field(default_factory=dict)
 
 
 class EnrichIn(BaseModel):
@@ -99,6 +103,7 @@ def meta(user: str = Depends(current_user)):
         "agent_id": config.FOUNDRY_AGENT_ID or None,
         "verificacao": verify.enabled(),
         "tipos_sinal": {k: v[0] for k, v in sinais_mod.TIPOS.items()},
+        "perfil": scoring.get_weights()["perfil"],
     }
 
 
@@ -106,8 +111,10 @@ def meta(user: str = Depends(current_user)):
 def leads(cidade: str | None = None, servico: str | None = None, min_score: int = 0, status: str | None = None,
           q: str | None = None, base: str | None = None, max_horas: float | None = None,
           com_email: bool | None = None, responsavel: str | None = None, acao: str | None = None,
-          user: str = Depends(current_user)):
-    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas, com_email, responsavel, acao)
+          perfil: str | None = "dentro", user: str = Depends(current_user)):
+    """perfil: dentro (padrão, oculta os fora do perfil) | fora | todos."""
+    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas, com_email, responsavel, acao,
+                         perfil if perfil in ("dentro", "fora") else None)
 
 
 @app.get("/api/leads/{lead_id}")
@@ -125,6 +132,7 @@ def _pesos_payload() -> dict:
         "limites": scoring.LIMITES,
         "servicos": {k: {"label": v[0], "cobre": v[1]} for k, v in scoring.SERVICE_GROUPS.items()},
         "fatores": scoring.FACTORS,
+        "perfil": perfil_mod.LABELS,
     }
 
 
@@ -151,6 +159,10 @@ def update_lead(lead_id: int, body: StatusIn, user: str = Depends(current_user))
         if body.status not in db.STATUSES:
             raise HTTPException(400, "Status inválido")
         db.set_status(lead_id, body.status, user)
+    if body.perfil is not None:
+        if body.perfil not in ("dentro", "fora", "auto"):
+            raise HTTPException(400, "Perfil inválido (use dentro, fora ou auto)")
+        db.set_perfil_manual(lead_id, body.perfil, (body.perfil_motivo or "").strip(), user)
     if body.proxima_acao_data:
         try:
             date.fromisoformat(body.proxima_acao_data)
@@ -392,6 +404,59 @@ def signals(body: EnrichIn, tasks: BackgroundTasks, user: str = Depends(current_
     job_id = uuid.uuid4().hex
     db.create_job(job_id, {"tipo": "sinais", **body.model_dump()})
     tasks.add_task(_run_signals, job_id, leads_, use_foundry)
+    return {"job_id": job_id, "total": len(leads_)}
+
+
+def _mock_profile(lead_: dict) -> dict:
+    return {}  # modo demo: os campos de perfil fictícios já vêm na coleta
+
+
+def _run_profile(job_id: str, leads_: list[dict], use_foundry: bool) -> None:
+    """Reavalia o perfil: pede ao agente funcionários/TI interna/multinacional e atualiza o CNPJ (capital social)."""
+    feitos = 0
+    try:
+        find = _mock_profile
+        if use_foundry:
+            from .foundry_client import find_profile as find
+
+        def work(lead_: dict) -> str | None:
+            data = dict(lead_["detalhes"])
+            try:
+                data.update(find(lead_))
+                data["perfil_avaliado_em"] = db._now()
+            except Exception:  # noqa: BLE001
+                log.exception("Falha ao avaliar perfil do lead %s", lead_["id"])
+            if verify.enabled() and data.get("cnpj"):
+                try:
+                    info = verify.lookup_cnpj(verify.clean_cnpj(data["cnpj"]))
+                    if info:
+                        data["cnpj_dados"] = {**info, "consultado_em": db._now()}
+                except Exception:  # noqa: BLE001
+                    log.exception("Falha ao consultar CNPJ do lead %s", lead_["id"])
+            db.save_lead_data(lead_["id"], data)
+            return db.get_lead(lead_["id"])["perfil"]
+
+        db.job_progress(job_id, f"Avaliando o perfil de {len(leads_)} lead(s)…")
+        fora = 0
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for st in pool.map(work, leads_):
+                feitos += 1
+                fora += st == "fora"
+                db.job_progress(job_id, f"Avaliando perfil… {feitos}/{len(leads_)} lead(s), {fora} fora do perfil.", fora)
+        db.finish_job(job_id, "concluido", "perfil",
+                      f"Perfil reavaliado em {len(leads_)} lead(s): {fora} fora do perfil (ocultos por padrão).", 0, fora)
+    except Exception as exc:  # noqa: BLE001
+        db.finish_job(job_id, "erro", None, f"{type(exc).__name__}: {exc}"[:500])
+
+
+@app.post("/api/perfil")
+def reavaliar_perfil(body: EnrichIn, tasks: BackgroundTasks, user: str = Depends(current_user)):
+    """Reavalia o perfil de cliente ideal (vazio = todos os leads reais) com o agente + dados do CNPJ."""
+    use_foundry = body.modo != "mock" and config.foundry_enabled()
+    leads_ = db.leads_for_profile(body.lead_ids or None)
+    job_id = uuid.uuid4().hex
+    db.create_job(job_id, {"tipo": "perfil", **body.model_dump()})
+    tasks.add_task(_run_profile, job_id, leads_, use_foundry)
     return {"job_id": job_id, "total": len(leads_)}
 
 

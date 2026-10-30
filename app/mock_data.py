@@ -79,7 +79,7 @@ def _lead(rng: random.Random, cidade: str | None = None, servicos_foco: list[str
     if servicos_foco:
         servicos.update(rng.sample(servicos_foco, min(len(servicos_foco), 2)))
     servicos = [s for s in SERVICES if s in servicos]
-    porte = rng.choices(["pequena", "media", "grande"], weights=[3, 4, 2])[0]
+    porte = rng.choices(["pequena", "media", "grande"], weights=[4, 4, 1])[0]
     funcs = {"pequena": rng.randint(20, 99), "media": rng.randint(100, 499), "grande": rng.randint(500, 3000)}[porte]
     score = min(98, 35 + 8 * len(servicos) + 6 * len(sinais) + {"pequena": 0, "media": 6, "grande": 10}[porte]
                 + (5 if (horas or 0) <= 1 else 0) + rng.randint(-8, 8))
@@ -95,6 +95,11 @@ def _lead(rng: random.Random, cidade: str | None = None, servicos_foco: list[str
         "segmento": seg,
         "porte": porte,
         "funcionarios_estimados": funcs,
+        "ti_interna": ({"status": "sim", "evidencia": "Diretoria de TI e equipe própria de infraestrutura (fictício)", "fonte": None}
+                       if porte == "grande" else {"status": rng.choice(["nao", "desconhecido"]),
+                                                  "evidencia": "Sem vagas ou cargos de liderança de TI (fictício)", "fonte": None}),
+        "multinacional": {"status": "sim" if porte == "grande" else "nao", "grupo": None, "fonte": None},
+        "terceirizacao": {"status": "desconhecido", "evidencia": None, "fonte": None},
         "necessidades": [_NECESSIDADES[s] for s in servicos],
         "sinais": [{"descricao": d, "fonte": None, "tipo": _TIPO_SINAL.get(d, "noticia"),
                     "data": (date.today() - timedelta(days=rng.randint(5, 420))).isoformat()} for d, _ in sinais],
