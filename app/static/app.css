@@ -64,7 +64,9 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: .9rem; color
 .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
 .panel-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
 .panel h2 { margin: 0; font-size: 1.1rem; }
-.filters { display: grid; grid-template-columns: 2fr repeat(3, 1fr) 1.2fr; gap: 12px; align-items: end; }
+.filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: end; }
+.filters #f-q { grid-column: span 2; }
+.city small { display: block; color: var(--muted); font-size: .78rem; margin-top: 2px; }
 .range { flex-direction: column; }
 .range input { padding: 0; accent-color: var(--primary); }
 
@@ -140,6 +142,7 @@ legend { color: var(--muted); font-size: .85rem; padding: 0 6px; }
   .container { padding: 14px; }
   .topbar { padding: 12px 14px; }
   .filters { grid-template-columns: 1fr; }
+  .filters #f-q { grid-column: auto; }
   .hide-sm { display: none; }
   .row { grid-template-columns: 1fr; }
   .facts { grid-template-columns: 1fr; }

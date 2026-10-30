@@ -108,7 +108,7 @@ def create_agent(client, model: str, tools: list, tool_label: str):
     return client.agents.create_version(
         agent_name=AGENT_NAME,
         definition=definition,
-        description="Prospecção B2B de empresas em Itu, Sorocaba e São Paulo que precisam de parceiro de TI.",
+        description="Prospecção B2B de empresas a até 3,5 h de carro de Itu, Sorocaba e São Paulo que precisam de parceiro de TI.",
         metadata={"projeto": "Coleta_Leads", "pesquisa_web": tool_label},
     )
 

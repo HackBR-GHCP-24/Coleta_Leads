@@ -25,7 +25,9 @@ JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", "480"))
 DATABASE_PATH = ROOT / os.getenv("DATABASE_PATH", "data/leads.db")
 SEED_DEMO_DATA = _bool("SEED_DEMO_DATA", True)
 
-CITIES = ["Itu", "Sorocaba", "São Paulo"]
+# Bases de atendimento: a prospecção cobre empresas a até MAX_TRAVEL_HOURS de carro da base mais próxima.
+BASES = ["Itu", "Sorocaba", "São Paulo"]
+MAX_TRAVEL_HOURS = float(os.getenv("MAX_TRAVEL_HOURS", "3.5"))
 SERVICES = {
     "acronis": "Acronis (backup, DR e cibersegurança)",
     "servicos_gerenciados": "Serviços gerenciados",

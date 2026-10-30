@@ -24,12 +24,19 @@ def _get_openai():
     return _openai
 
 
-def build_prompt(cities: list[str], services: list[str], segment: str | None, quantity: int) -> str:
-    cities = cities or config.CITIES
+def build_prompt(bases: list[str], services: list[str], segment: str | None, quantity: int,
+                 cities: list[str] | None = None, max_hours: float | None = None) -> str:
+    bases = bases or config.BASES
+    max_hours = max_hours or config.MAX_TRAVEL_HOURS
     parts = [
         f"Encontre {quantity} empresas (clientes finais, NÃO empresas de TI/MSPs/integradores) com potencial de "
-        f"contratar um parceiro de TI nas cidades: {', '.join(cities)} (SP).",
+        f"contratar um parceiro de TI, localizadas a até {max_hours:g} horas de carro de {', '.join(bases)} (SP).",
     ]
+    if cities:
+        parts.append(f"Concentre a busca nestas cidades: {', '.join(cities)}.")
+    else:
+        parts.append("Distribua os leads em pelo menos 3 cidades diferentes dentro desse raio, incluindo cidades fora das bases.")
+    parts.append("Para cada empresa informe base_proxima, distancia_km e tempo_viagem_h (estimativas por rodovia).")
     if services:
         names = ", ".join(f"{k} ({SERVICES.get(k, k)})" for k in services)
         parts.append(f"Priorize empresas com necessidade destes serviços: {names}.")
@@ -39,10 +46,21 @@ def build_prompt(cities: list[str], services: list[str], segment: str | None, qu
     return " ".join(parts)
 
 
-_GENERIC = re.compile(r"\b(setor|segmento)\s+geral\b|^empresas\s+(de|do|da|em|industriais)\b", re.I)
+_GENERIC = re.compile(
+    r"\b(setor|segmento)\s+geral\b|^empresas?\s+(de|do|da|em|industriais)\b|^empresas?\b.*\s(em|na|no)\s+[A-ZÀ-Ú]"
+    r"|\((multinacional|não identificad\w*|confidencial)\)",
+    re.I,
+)
 
 
-def parse_response(text: str) -> dict:
+def _num(v) -> float | None:
+    try:
+        return round(float(str(v).replace(",", ".")), 2) if v not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def parse_response(text: str, max_hours: float | None = None) -> dict:
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.S)
     candidate = fenced.group(1) if fenced else text[text.find("{"): text.rfind("}") + 1]
     data = json.loads(candidate)
@@ -54,6 +72,12 @@ def parse_response(text: str) -> dict:
         if site and not site.startswith("http") and "." in site and " " not in site:
             lead["site"] = "https://" + site
         lead["servicos_recomendados"] = [s for s in lead.get("servicos_recomendados") or [] if s in SERVICES]
+        lead["cidade"] = (lead.get("cidade") or "").strip() or None
+        lead["distancia_km"] = _num(lead.get("distancia_km"))
+        lead["tempo_viagem_h"] = _num(lead.get("tempo_viagem_h"))
+    if max_hours:
+        # tolerância de 15 min para as estimativas do modelo
+        data["leads"] = [l for l in data["leads"] if l["tempo_viagem_h"] is None or l["tempo_viagem_h"] <= max_hours + 0.25]
     return data
 
 
@@ -80,16 +104,18 @@ def _attach_sources(data: dict, citations: list[dict]) -> None:
                 s["fonte"] = fontes[0] if fontes else None
 
 
-def run_agent(cities: list[str], services: list[str], segment: str | None, quantity: int) -> dict:
+def run_agent(bases: list[str], services: list[str], segment: str | None, quantity: int,
+              cities: list[str] | None = None, max_hours: float | None = None) -> dict:
+    max_hours = max_hours or config.MAX_TRAVEL_HOURS
     response = _get_openai().responses.create(
-        input=build_prompt(cities, services, segment, quantity),
+        input=build_prompt(bases, services, segment, quantity, cities, max_hours),
         extra_body={"agent_reference": {"name": config.FOUNDRY_AGENT_NAME, "type": "agent_reference"}},
         timeout=300,
     )
     text = response.output_text or ""
     if not text:
         raise RuntimeError("O agente não retornou texto")
-    data = parse_response(text)
+    data = parse_response(text, max_hours)
     citations = _citations(response)
     _attach_sources(data, citations)
     data["fontes_pesquisa"] = citations

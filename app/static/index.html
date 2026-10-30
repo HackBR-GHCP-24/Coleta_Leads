@@ -13,7 +13,7 @@
   <section id="login-view" class="login-wrap hidden">
     <form id="login-form" class="login-card">
       <div class="brand"><span class="logo">◆</span> Prospector de TI</div>
-      <p class="muted">Leads B2B em Itu, Sorocaba e São Paulo</p>
+      <p class="muted">Leads B2B até 3,5 h de carro de Itu, Sorocaba e São Paulo</p>
       <label>Usuário<input id="login-user" autocomplete="username" required /></label>
       <label>Senha<input id="login-pass" type="password" autocomplete="current-password" required /></label>
       <button class="btn primary" type="submit">Entrar</button>
@@ -39,6 +39,13 @@
       <div class="panel filters">
         <input id="f-q" type="search" placeholder="Buscar empresa, segmento, sinal…" />
         <select id="f-cidade"><option value="">Todas as cidades</option></select>
+        <select id="f-base"><option value="">Todas as bases</option></select>
+        <select id="f-horas">
+          <option value="">Qualquer distância</option>
+          <option value="1">Até 1 h de carro</option>
+          <option value="2">Até 2 h de carro</option>
+          <option value="3.5">Até 3,5 h de carro</option>
+        </select>
         <select id="f-servico"><option value="">Todos os serviços</option></select>
         <select id="f-status"><option value="">Todos os status</option></select>
         <label class="range">Score mín. <b id="f-score-val">0</b>
@@ -78,8 +85,14 @@
   <dialog id="collect-dialog">
     <form id="collect-form" method="dialog" class="dialog-body">
       <h2>Nova coleta de leads</h2>
-      <p class="muted">O agente do Foundry pesquisará empresas que precisam de um parceiro de TI.</p>
-      <fieldset><legend>Cidades</legend><div id="c-cidades" class="chips"></div></fieldset>
+      <p class="muted">O agente do Foundry pesquisará empresas que precisam de um parceiro de TI na região atendida.</p>
+      <fieldset><legend>Bases de atendimento</legend><div id="c-bases" class="chips"></div></fieldset>
+      <div class="row">
+        <label>Tempo máx. de carro até a base: <b id="c-horas-val">3,5 h</b>
+          <input id="c-horas" type="range" min="0.5" max="3.5" step="0.5" value="3.5" />
+        </label>
+        <label>Cidades específicas (opcional)<input id="c-cidades" placeholder="ex.: Campinas, Jundiaí, Tatuí" /></label>
+      </div>
       <fieldset><legend>Serviços prioritários</legend><div id="c-servicos" class="chips"></div></fieldset>
       <div class="row">
         <label>Segmento (opcional)<input id="c-segmento" placeholder="ex.: indústria, saúde, logística" /></label>

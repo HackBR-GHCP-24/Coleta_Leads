@@ -1,7 +1,7 @@
 # Coleta de Leads · Prospector de TI
 
-Demonstração funcional de um coletor de leads B2B. Um **agente publicado no Azure AI Foundry** pesquisa na web empresas de
-**Itu, Sorocaba e São Paulo** que precisam de um parceiro de TI. Um app web (FastAPI + SQLite + frontend responsivo) armazena
+Demonstração funcional de um coletor de leads B2B. Um **agente publicado no Azure AI Foundry** pesquisa na web empresas a até
+**3,5 horas de carro de Itu, Sorocaba ou São Paulo** que precisam de um parceiro de TI. Um app web (FastAPI + SQLite + frontend responsivo) armazena
 os leads e monta um **ranking de oportunidades**. O acesso exige login e senha.
 
 Portfólio considerado pelo agente: Acronis (backup, DR e cibersegurança), serviços gerenciados, Modern Work com Microsoft 365,
@@ -31,7 +31,9 @@ flowchart LR
 ## Agente no Foundry
 
 - **Projeto:** `https://foundry-hackbr-ghcp.services.ai.azure.com/api/projects/prj-foundry-HackBR-GHCP-24`
-- **Agente:** `prospector-ti-itu-sorocaba-sp`. A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
+- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 6 (`prospector-ti-itu-sorocaba-sp:6`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
+- **Região:** qualquer cidade a até 3,5 h de carro da base mais próxima (Itu, Sorocaba ou São Paulo). O agente informa a cidade
+  real, `base_proxima`, `distancia_km` e `tempo_viagem_h` (estimativas por rodovia). O backend descarta leads acima do limite pedido.
 - **Modelo:** deployment `gpt-4o`, o único deployment de chat disponível no projeto.
 - **Pesquisa web:** ferramenta `web_search` nativa dos agentes do Foundry. O projeto não tem conexão **Bing Grounding**. Se uma for
   criada no futuro, o script a detecta (ou use `FOUNDRY_BING_CONNECTION_NAME`) e passa a usar `bing_grounding`. Se nenhuma
@@ -63,6 +65,7 @@ Variáveis principais do `.env`, que **não é versionado**:
 | `FOUNDRY_MODEL_DEPLOYMENT` | Deployment do modelo (vazio = escolha automática) |
 | `FOUNDRY_AGENT_NAME` / `FOUNDRY_AGENT_ID` | Preenchidos pelo script de provisionamento |
 | `APP_MODE` | `auto` (Foundry com fallback para demo), `foundry` ou `mock` |
+| `MAX_TRAVEL_HOURS` | Raio máximo da prospecção em horas de carro até a base mais próxima (padrão `3.5`) |
 | `APP_USERNAME` / `APP_PASSWORD` | Usuário de demonstração. A senha é gravada no banco só como hash PBKDF2-SHA256 |
 | `JWT_SECRET` | Segredo de assinatura dos tokens (`python -c "import secrets;print(secrets.token_urlsafe(48))"`) |
 | `SEED_DEMO_DATA` | Popula o banco com leads fictícios na primeira execução |
@@ -75,7 +78,7 @@ A autenticação no Azure usa **Entra ID** (`DefaultAzureCredential`). Nenhuma c
 az login                                   # ou: az login --use-device-code
 python agent/provision_agent.py --list     # lista deployments e conexões
 python agent/provision_agent.py            # cria/atualiza o agente (nova versão)
-python agent/test_agent.py Sorocaba 3      # testa o agente pelo terminal
+python agent/test_agent.py Campinas 3      # testa o agente pelo terminal (sem cidade = raio inteiro)
 ```
 
 Ao alterar `agent/instructions.md`, rode o script de novo para publicar uma nova versão.
@@ -89,10 +92,12 @@ python -m uvicorn app.main:app --port 8000
 Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env`.
 
 - **Dashboard:** KPIs (total, oportunidades quentes, score médio, serviço mais demandado, última coleta).
-- **Ranking:** lista ordenada pelo score final, com filtros por cidade, serviço, status, score mínimo e busca textual.
-- **Detalhes:** justificativa, necessidades, sinais com fontes, contato sugerido e alteração de status
+- **Ranking:** lista ordenada pelo score final, com filtros por cidade (as cidades reais já coletadas), base mais próxima,
+  tempo de carro (até 1 h, 2 h ou 3,5 h), serviço, status, score mínimo e busca textual. Cada lead mostra o tempo e a distância até a base.
+- **Detalhes:** justificativa, necessidades, sinais com fontes, localização (base, km e tempo de carro), contato sugerido e alteração de status
   (novo → contatado → qualificado → proposta / descartado).
-- **Nova coleta:** escolha cidades, serviços prioritários, segmento e quantidade. A coleta roda em segundo plano (de 15 a 60 s
+- **Nova coleta:** escolha as bases, o tempo máximo de carro (0,5 a 3,5 h), cidades específicas opcionais (texto livre),
+  serviços prioritários, segmento e quantidade. A coleta roda em segundo plano (de 15 a 90 s
   com o Foundry) e os leads repetidos são atualizados (deduplicação por empresa + cidade).
 - **Modo demo:** marque "Usar dados de demonstração" ou use `APP_MODE=mock` para gerar empresas **fictícias** marcadas com
   "(exemplo)" sem chamar o Foundry. Em `APP_MODE=auto`, falhas do Foundry também caem para o modo demo, com aviso.
@@ -101,8 +106,8 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
 
 `score_final = 60% × score do agente + 40% × score heurístico`
 
-O score heurístico combina aderência ao portfólio (35%), força dos sinais (25%), porte (20%), cidade (10%, com prioridade para
-Itu e Sorocaba) e nível de confiança (10%). Faixas: **quente** ≥ 75, **morno** ≥ 55, **frio** < 55.
+O score heurístico combina aderência ao portfólio (35%), força dos sinais (25%), porte (20%), proximidade (10%: 100% na base,
+caindo linearmente até 30% com 3,5 h de carro) e nível de confiança (10%). Faixas: **quente** ≥ 75, **morno** ≥ 55, **frio** < 55.
 
 ## API
 
@@ -111,10 +116,10 @@ Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{token}` |
-| GET | `/api/leads` | Ranking. Filtros: `cidade`, `servico`, `status`, `min_score`, `q` |
+| GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status`, `min_score`, `q` |
 | GET / PATCH | `/api/leads/{id}` | Detalhes / atualização de status |
 | GET | `/api/stats`, `/api/meta` | KPIs e metadados |
-| POST | `/api/collect` | Dispara uma coleta → `{job_id}` |
+| POST | `/api/collect` | `{bases, max_horas, cidades, servicos, segmento, quantidade, modo}` → `{job_id}` |
 | GET | `/api/jobs/{id}` | Status da coleta |
 
 ## Observações

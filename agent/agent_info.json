@@ -1,9 +1,9 @@
 {
   "agent_name": "prospector-ti-itu-sorocaba-sp",
-  "agent_id": "prospector-ti-itu-sorocaba-sp:4",
-  "agent_version": "4",
+  "agent_id": "prospector-ti-itu-sorocaba-sp:6",
+  "agent_version": "6",
   "model_deployment": "gpt-4o",
   "pesquisa_web": "web_search",
   "project_endpoint": "https://foundry-hackbr-ghcp.services.ai.azure.com/api/projects/prj-foundry-HackBR-GHCP-24",
-  "updated_at": "2026-10-30T16:27:56.902279+00:00"
+  "updated_at": "2026-10-30T16:40:13.160837+00:00"
 }

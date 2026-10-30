@@ -37,7 +37,9 @@ class StatusIn(BaseModel):
 
 
 class CollectIn(BaseModel):
-    cidades: list[str] = Field(default_factory=list)
+    bases: list[str] = Field(default_factory=list)
+    cidades: list[str] = Field(default_factory=list)  # cidades específicas (texto livre, opcional)
+    max_horas: float = Field(default=config.MAX_TRAVEL_HOURS, gt=0, le=config.MAX_TRAVEL_HOURS)
     servicos: list[str] = Field(default_factory=list)
     segmento: str | None = None
     quantidade: int = Field(default=5, ge=1, le=15)
@@ -59,7 +61,9 @@ def me(user: str = Depends(current_user)):
 @app.get("/api/meta")
 def meta(user: str = Depends(current_user)):
     return {
-        "cidades": config.CITIES,
+        "bases": config.BASES,
+        "max_horas": config.MAX_TRAVEL_HOURS,
+        "cidades": db.distinct_cities(),
         "servicos": config.SERVICES,
         "status": db.STATUSES,
         "modo": "foundry" if config.foundry_enabled() else "mock",
@@ -69,8 +73,9 @@ def meta(user: str = Depends(current_user)):
 
 @app.get("/api/leads")
 def leads(cidade: str | None = None, servico: str | None = None, min_score: int = 0, status: str | None = None,
-          q: str | None = None, user: str = Depends(current_user)):
-    return db.list_leads(cidade, servico, min_score, status, q)
+          q: str | None = None, base: str | None = None, max_horas: float | None = None,
+          user: str = Depends(current_user)):
+    return db.list_leads(cidade, servico, min_score, status, q, base, max_horas)
 
 
 @app.get("/api/leads/{lead_id}")
@@ -95,6 +100,11 @@ def stats(user: str = Depends(current_user)):
     return db.stats()
 
 
+def _mock(body: CollectIn) -> dict:
+    return mock_data.generate(body.bases, body.servicos, body.segmento, body.quantidade,
+                              cities=body.cidades, max_hours=body.max_horas)
+
+
 def _run_collect(job_id: str, body: CollectIn) -> None:
     use_foundry = body.modo != "mock" and config.foundry_enabled()
     aviso = ""
@@ -103,17 +113,18 @@ def _run_collect(job_id: str, body: CollectIn) -> None:
             try:
                 from .foundry_client import run_agent
 
-                result = run_agent(body.cidades, body.servicos, body.segmento, body.quantidade)
+                result = run_agent(body.bases, body.servicos, body.segmento, body.quantidade,
+                                   body.cidades, body.max_horas)
                 origem = "foundry"
             except Exception as exc:  # noqa: BLE001
                 log.exception("Falha ao chamar o agente do Foundry")
                 if config.APP_MODE == "foundry":
                     raise
                 aviso = f"Foundry indisponível ({type(exc).__name__}: {str(exc)[:160]}); usados dados de exemplo. "
-                result = mock_data.generate(body.cidades, body.servicos, body.segmento, body.quantidade)
+                result = _mock(body)
                 origem = "demo"
         else:
-            result = mock_data.generate(body.cidades, body.servicos, body.segmento, body.quantidade)
+            result = _mock(body)
             origem = "demo"
         novos, atualizados = db.upsert_leads(result.get("leads", []), origem)
         msg = aviso + f"{novos} novo(s), {atualizados} atualizado(s). {result.get('observacoes') or ''}".strip()
@@ -124,9 +135,10 @@ def _run_collect(job_id: str, body: CollectIn) -> None:
 
 @app.post("/api/collect")
 def collect(body: CollectIn, tasks: BackgroundTasks, user: str = Depends(current_user)):
-    invalid = [s for s in body.servicos if s not in config.SERVICES]
+    invalid = [s for s in body.servicos if s not in config.SERVICES] + [b for b in body.bases if b not in config.BASES]
     if invalid:
-        raise HTTPException(400, f"Serviços inválidos: {invalid}")
+        raise HTTPException(400, f"Serviços/bases inválidos: {invalid}")
+    body.cidades = [c.strip()[:60] for c in body.cidades if c.strip()][:10]
     job_id = uuid.uuid4().hex
     db.create_job(job_id, body.model_dump())
     tasks.add_task(_run_collect, job_id, body)

@@ -55,16 +55,30 @@ async function boot() {
 
 function fillFilters() {
   const m = state.meta;
-  const opts = (sel, items, first) => { $(sel).innerHTML = `<option value="">${first}</option>` + items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join(""); };
+  const opts = (sel, items, first) => { const cur = $(sel).value; $(sel).innerHTML = `<option value="">${first}</option>` + items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join(""); $(sel).value = cur; };
   opts("#f-cidade", m.cidades.map((c) => [c, c]), "Todas as cidades");
+  opts("#f-base", m.bases.map((c) => [c, `Base ${c}`]), "Todas as bases");
   opts("#f-servico", Object.entries(m.servicos), "Todos os serviços");
   opts("#f-status", m.status.map((s) => [s, s[0].toUpperCase() + s.slice(1)]), "Todos os status");
   const chips = (sel, items, name, checked) => { $(sel).innerHTML = items.map(([v, l]) => `<label class="chip"><input type="checkbox" name="${name}" value="${esc(v)}" ${checked ? "checked" : ""}/>${esc(l)}</label>`).join(""); };
-  chips("#c-cidades", m.cidades.map((c) => [c, c]), "cidade", true);
+  chips("#c-bases", m.bases.map((c) => [c, c]), "base", true);
   chips("#c-servicos", Object.entries(m.servicos), "servico", false);
+  $("#c-horas").max = m.max_horas; $("#c-horas").value = m.max_horas; showHoras();
 }
 
-["#f-cidade", "#f-servico", "#f-status"].forEach((s) => $(s).addEventListener("change", refresh));
+async function reloadCities() {
+  state.meta = await api("/api/meta");
+  const cur = $("#f-cidade").value;
+  $("#f-cidade").innerHTML = `<option value="">Todas as cidades</option>` + state.meta.cidades.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  $("#f-cidade").value = cur;
+}
+
+const fmtH = (h) => { if (h == null) return ""; if (h === 0) return "na base"; const t = Math.round(h * 60); return t < 60 ? `${t} min` : `${Math.floor(t / 60)}h${String(t % 60).padStart(2, "0")}`; };
+const locLine = (l) => (l.tempo_viagem_h == null ? "distância não informada" : l.tempo_viagem_h === 0 ? `base ${l.base_proxima || ""}` : `${fmtH(l.tempo_viagem_h)}${l.distancia_km ? ` · ${Math.round(l.distancia_km)} km` : ""}${l.base_proxima ? ` de ${l.base_proxima}` : ""}`);
+function showHoras() { $("#c-horas-val").textContent = `${String($("#c-horas").value).replace(".", ",")} h`; }
+$("#c-horas").addEventListener("input", showHoras);
+
+["#f-cidade", "#f-base", "#f-horas", "#f-servico", "#f-status"].forEach((s) => $(s).addEventListener("change", refresh));
 $("#f-score").addEventListener("input", (e) => { $("#f-score-val").textContent = e.target.value; debounce(); });
 $("#f-q").addEventListener("input", () => debounce());
 function debounce() { clearTimeout(state.timer); state.timer = setTimeout(refresh, 250); }
@@ -73,6 +87,7 @@ async function refresh() {
   const p = new URLSearchParams();
   const add = (k, v) => v && p.set(k, v);
   add("cidade", $("#f-cidade").value); add("servico", $("#f-servico").value); add("status", $("#f-status").value);
+  add("base", $("#f-base").value); add("max_horas", $("#f-horas").value);
   add("q", $("#f-q").value.trim()); add("min_score", $("#f-score").value);
   const [leads, stats] = await Promise.all([api(`/api/leads?${p}`), api("/api/stats")]);
   renderKpis(stats); renderLeads(leads);
@@ -82,8 +97,9 @@ function renderKpis(s) {
   const top = Object.entries(s.por_servico).sort((a, b) => b[1] - a[1])[0];
   const last = s.ultima_coleta;
   const kpi = (label, value, sub = "") => `<div class="kpi"><div class="label">${label}</div><div class="value${String(value).length > 8 ? " small" : ""}">${value}</div><div class="sub">${sub}</div></div>`;
+  const cities = Object.entries(s.por_cidade).sort((a, b) => b[1] - a[1]);
   $("#kpis").innerHTML = [
-    kpi("Leads coletados", s.total, Object.entries(s.por_cidade).map(([c, n]) => `${esc(c)}: ${n}`).join(" · ")),
+    kpi("Leads coletados", s.total, `${cities.length} cidade(s) · ` + cities.slice(0, 3).map(([c, n]) => `${esc(c)}: ${n}`).join(" · ")),
     kpi("Oportunidades quentes", s.quentes, "score ≥ 75"),
     kpi("Score médio", s.score_medio, "ranking ponderado"),
     kpi("Serviço mais demandado", top ? esc(state.meta.servicos[top[0]] || top[0]).split(" (")[0] : "—", top ? `${top[1]} lead(s)` : ""),
@@ -100,7 +116,7 @@ function renderLeads(leads) {
     <tr data-id="${l.id}">
       <td class="rank">${l.rank}</td>
       <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}</small></td>
-      <td>${esc(l.cidade)}</td>
+      <td class="city">${esc(l.cidade)}<small>${esc(locLine(l))}</small></td>
       <td class="hide-sm">${esc(l.segmento)}</td>
       <td class="hide-sm" style="text-transform:capitalize">${esc(l.porte)}</td>
       <td class="hide-md"><div class="tags">${l.servicos.slice(0, 3).map((s) => `<span class="tag">${esc(svcLabel(s))}</span>`).join("")}${l.servicos.length > 3 ? `<span class="tag">+${l.servicos.length - 3}</span>` : ""}</div></td>
@@ -128,6 +144,7 @@ async function openLead(id) {
       <div class="fact"><span>Score do agente</span><div class="big-score">${l.score_agente}</div></div>
       <div class="fact"><span>Porte</span>${esc(l.porte)}${d.funcionarios_estimados ? ` · ~${esc(d.funcionarios_estimados)} func.` : ""}</div>
       <div class="fact"><span>Confiança</span>${esc(d.nivel_confianca || "—")}</div>
+      <div class="fact"><span>Localização</span>${esc(l.cidade)}/${esc(d.uf || "SP")}<br><small class="muted">${esc(locLine(l))}</small></div>
       <div class="fact"><span>CNPJ</span>${esc(d.cnpj || "—")}</div>
       <div class="fact"><span>Contato sugerido</span>${esc(d.contato_sugerido?.cargo || "—")}<br><small class="muted">${esc(d.contato_sugerido?.canal || "")}</small></div>
     </div>
@@ -159,7 +176,9 @@ $("#collect-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const checked = (n) => [...document.querySelectorAll(`input[name=${n}]:checked`)].map((i) => i.value);
   const body = {
-    cidades: checked("cidade"), servicos: checked("servico"),
+    bases: checked("base"), servicos: checked("servico"),
+    cidades: $("#c-cidades").value.split(",").map((c) => c.trim()).filter(Boolean),
+    max_horas: +$("#c-horas").value,
     segmento: $("#c-segmento").value.trim() || null,
     quantidade: Math.min(15, Math.max(1, +$("#c-qtd").value || 5)),
     modo: $("#c-mock").checked ? "mock" : null,
@@ -172,6 +191,7 @@ $("#collect-form").addEventListener("submit", async (e) => {
     let job;
     do { await new Promise((r) => setTimeout(r, 2000)); job = await api(`/api/jobs/${job_id}`); } while (job.status === "executando");
     status.textContent = (job.status === "concluido" ? "✅ " : "❌ ") + job.message;
+    await reloadCities();
     await refresh();
     toast(job.status === "concluido" ? "Coleta concluída" : "Falha na coleta");
   } catch (err) { status.textContent = "❌ " + err.message; }

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from . import config
 from .auth import hash_password, verify_password
-from .scoring import final_score, tier
+from .scoring import final_score, tier, travel_hours
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -137,6 +137,9 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
         "origem": row["origem"],
         "nivel_confianca": data.get("nivel_confianca"),
         "necessidades": data.get("necessidades") or [],
+        "base_proxima": data.get("base_proxima") or (row["cidade"] if travel_hours(data) == 0 else None),
+        "distancia_km": data.get("distancia_km"),
+        "tempo_viagem_h": travel_hours(data),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -145,7 +148,7 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
     return out
 
 
-def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None) -> list[dict]:
+def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None, base=None, max_horas=None) -> list[dict]:
     sql = "SELECT * FROM leads WHERE score_final >= ?"
     args: list = [min_score]
     if cidade:
@@ -164,6 +167,10 @@ def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None) -> l
     with conn() as c:
         rows = c.execute(sql, args).fetchall()
     leads = [_row_to_lead(r) for r in rows]
+    if base:
+        leads = [l for l in leads if l["base_proxima"] == base]
+    if max_horas is not None:
+        leads = [l for l in leads if l["tempo_viagem_h"] is not None and l["tempo_viagem_h"] <= max_horas]
     for i, lead in enumerate(leads, 1):
         lead["rank"] = i
     return leads
@@ -206,6 +213,11 @@ def stats() -> dict:
 def count_leads() -> int:
     with conn() as c:
         return c.execute("SELECT COUNT(*) FROM leads").fetchone()[0]
+
+
+def distinct_cities() -> list[str]:
+    with conn() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT cidade FROM leads WHERE cidade IS NOT NULL ORDER BY cidade")]
 
 
 def create_job(job_id: str, params: dict) -> None:
