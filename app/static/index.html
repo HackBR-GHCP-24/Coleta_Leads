@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prospector de TI · Coleta de Leads</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <!-- Login -->
+  <section id="login-view" class="login-wrap hidden">
+    <form id="login-form" class="login-card">
+      <div class="brand"><span class="logo">◆</span> Prospector de TI</div>
+      <p class="muted">Leads B2B em Itu, Sorocaba e São Paulo</p>
+      <label>Usuário<input id="login-user" autocomplete="username" required /></label>
+      <label>Senha<input id="login-pass" type="password" autocomplete="current-password" required /></label>
+      <button class="btn primary" type="submit">Entrar</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </section>
+
+  <!-- App -->
+  <section id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="brand"><span class="logo">◆</span> Prospector de TI</div>
+      <div class="topbar-right">
+        <span id="mode-badge" class="badge"></span>
+        <span id="user-name" class="muted"></span>
+        <button id="btn-collect" class="btn primary">＋ Nova coleta</button>
+        <button id="btn-logout" class="btn ghost" title="Sair">Sair</button>
+      </div>
+    </header>
+
+    <main class="container">
+      <div id="kpis" class="kpis"></div>
+
+      <div class="panel filters">
+        <input id="f-q" type="search" placeholder="Buscar empresa, segmento, sinal…" />
+        <select id="f-cidade"><option value="">Todas as cidades</option></select>
+        <select id="f-servico"><option value="">Todos os serviços</option></select>
+        <select id="f-status"><option value="">Todos os status</option></select>
+        <label class="range">Score mín. <b id="f-score-val">0</b>
+          <input id="f-score" type="range" min="0" max="100" step="5" value="0" />
+        </label>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Ranking de oportunidades</h2>
+          <span id="count" class="muted"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="ranking">
+            <thead><tr>
+              <th>#</th><th>Empresa</th><th>Cidade</th><th class="hide-sm">Segmento</th>
+              <th class="hide-sm">Porte</th><th class="hide-md">Serviços</th><th>Score</th><th class="hide-sm">Status</th>
+            </tr></thead>
+            <tbody id="leads-body"></tbody>
+          </table>
+          <p id="empty" class="muted center hidden">Nenhum lead encontrado com os filtros atuais.</p>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <!-- Detalhe -->
+  <aside id="drawer" class="drawer hidden" aria-hidden="true">
+    <div class="drawer-backdrop" data-close></div>
+    <div class="drawer-panel">
+      <button class="btn ghost close" data-close>✕</button>
+      <div id="drawer-content"></div>
+    </div>
+  </aside>
+
+  <!-- Nova coleta -->
+  <dialog id="collect-dialog">
+    <form id="collect-form" method="dialog" class="dialog-body">
+      <h2>Nova coleta de leads</h2>
+      <p class="muted">O agente do Foundry pesquisará empresas que precisam de um parceiro de TI.</p>
+      <fieldset><legend>Cidades</legend><div id="c-cidades" class="chips"></div></fieldset>
+      <fieldset><legend>Serviços prioritários</legend><div id="c-servicos" class="chips"></div></fieldset>
+      <div class="row">
+        <label>Segmento (opcional)<input id="c-segmento" placeholder="ex.: indústria, saúde, logística" /></label>
+        <label>Quantidade<input id="c-qtd" type="number" min="1" max="15" value="5" /></label>
+      </div>
+      <label class="check"><input id="c-mock" type="checkbox" /> Usar dados de demonstração (sem Foundry)</label>
+      <div id="collect-status" class="collect-status hidden"></div>
+      <div class="actions">
+        <button type="button" class="btn ghost" id="collect-cancel">Fechar</button>
+        <button type="submit" class="btn primary" id="collect-submit">Iniciar coleta</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
