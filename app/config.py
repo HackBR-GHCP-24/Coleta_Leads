@@ -24,6 +24,8 @@ JWT_SECRET = os.getenv("JWT_SECRET") or secrets.token_urlsafe(48)
 JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", "480"))
 DATABASE_PATH = ROOT / os.getenv("DATABASE_PATH", "data/leads.db")
 SEED_DEMO_DATA = _bool("SEED_DEMO_DATA", True)
+# Consulta APIs públicas (BrasilAPI/ReceitaWS para CNPJ, Nominatim + OSRM para rotas) para verificar os leads reais
+VERIFICACAO_EXTERNA = _bool("VERIFICACAO_EXTERNA", True)
 
 # Bases de atendimento: a prospecção cobre empresas a até MAX_TRAVEL_HOURS de carro da base mais próxima.
 BASES = ["Itu", "Sorocaba", "São Paulo"]

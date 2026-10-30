@@ -57,6 +57,12 @@ Use exclusivamente estas chaves em `servicos_recomendados`:
    (nome.sobrenome@). Se não encontrar nenhum, devolva `"contatos_email": []` e `"email_status": "nao_encontrado"`;
    caso contrário `"email_status": "ok"`. Se o usuário pedir apenas o enriquecimento de e-mail de uma empresa, faça somente isso
    e responda no mesmo formato JSON com um único lead.
+7. **CNPJ (`cnpj`, `cnpj_fonte`)**: procure o CNPJ da empresa (de preferência da unidade/filial na `cidade` informada) em fontes
+   públicas — rodapé ou política de privacidade do site oficial, portais de transparência, Diário Oficial, cnpj.biz, casadosdados,
+   cnpja, econodata etc. Informe-o no formato 00.000.000/0000-00 e coloque em `cnpj_fonte` a URL exata onde ele aparece.
+   **Nunca invente nem "complete" CNPJs**: se não encontrar em fonte pública, use `null` em ambos. O aplicativo confere os dígitos
+   verificadores e consulta a Receita Federal (BrasilAPI/ReceitaWS); distância e tempo de carro também são recalculados por API
+   de rotas, então suas estimativas de localização servem apenas como referência.
 
 ## Formato de resposta (obrigatório)
 Responda **somente** com um único objeto JSON válido (sem texto antes ou depois, sem comentários), no formato:
@@ -66,7 +72,8 @@ Responda **somente** com um único objeto JSON válido (sem texto antes ou depoi
   "leads": [
     {
       "empresa": "string",
-      "cnpj": "string ou null",
+      "cnpj": "00.000.000/0000-00 ou null",
+      "cnpj_fonte": "url onde o CNPJ aparece ou null",
       "site": "string ou null",
       "cidade": "nome do município",
       "uf": "SP | MG | ...",

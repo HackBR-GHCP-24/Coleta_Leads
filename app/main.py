@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, emails, mock_data
+from . import config, db, emails, mock_data, verify
 from .auth import create_token, current_user
 
 log = logging.getLogger("coleta_leads")
@@ -36,6 +36,13 @@ class LoginIn(BaseModel):
 class StatusIn(BaseModel):
     status: str | None = None
     email: str | None = None  # "" remove os e-mails; valor substitui pelos informados manualmente
+    cnpj: str | None = None  # "" remove o CNPJ; valor informado manualmente é verificado na BrasilAPI/ReceitaWS
+
+
+class VerifyIn(BaseModel):
+    lead_ids: list[int] = Field(default_factory=list, max_length=100)  # vazio = leads reais ainda não verificados
+    todos: bool = False  # True = reverifica todos os leads reais
+    buscar_cnpj: bool = True  # pede ao agente o CNPJ dos leads que ainda não têm (modo Foundry)
 
 
 class EnrichIn(BaseModel):
@@ -75,6 +82,7 @@ def meta(user: str = Depends(current_user)):
         "status": db.STATUSES,
         "modo": "foundry" if config.foundry_enabled() else "mock",
         "agent_id": config.FOUNDRY_AGENT_ID or None,
+        "verificacao": verify.enabled(),
     }
 
 
@@ -107,6 +115,17 @@ def update_lead(lead_id: int, body: StatusIn, user: str = Depends(current_user))
         if bad:
             raise HTTPException(400, f"E-mail inválido: {', '.join(bad)}")
         db.set_contacts(lead_id, [{"email": e, "tipo": "manual"} for e in values], replace=True)
+    if body.cnpj is not None:
+        if body.cnpj.strip() and not verify.clean_cnpj(body.cnpj):
+            raise HTTPException(400, "CNPJ inválido (confira os 14 dígitos)")
+        data = db.get_lead(lead_id)["detalhes"]
+        if verify.enabled():
+            data = verify.verify_lead(data, cnpj_manual=body.cnpj.strip())
+        else:
+            cnpj = verify.clean_cnpj(body.cnpj)
+            data["cnpj"] = verify.fmt_cnpj(cnpj) if cnpj else None
+            data["origem_dados"] = {**(data.get("origem_dados") or {}), "cnpj": "manual" if cnpj else None}
+        db.save_lead_data(lead_id, data)
     return db.get_lead(lead_id)
 
 
@@ -143,6 +162,10 @@ def _run_collect(job_id: str, body: CollectIn) -> None:
             origem = "demo"
         novos, atualizados = db.upsert_leads(result.get("leads", []), origem)
         msg = aviso + f"{novos} novo(s), {atualizados} atualizado(s). {result.get('observacoes') or ''}".strip()
+        if origem == "foundry" and verify.enabled():
+            db.job_progress(job_id, msg + " Verificando CNPJ e rotas…", atualizados)
+            ok, total = _verify_leads(db.leads_for_verification(), buscar_cnpj=True)
+            msg += f" Verificados: {ok}/{total} lead(s) (CNPJ e/ou rota)."
         db.finish_job(job_id, "concluido", origem, msg, novos, atualizados)
     except Exception as exc:  # noqa: BLE001
         db.finish_job(job_id, "erro", None, f"{type(exc).__name__}: {exc}"[:500])
@@ -206,6 +229,58 @@ def enrich(body: EnrichIn, tasks: BackgroundTasks, user: str = Depends(current_u
     db.create_job(job_id, {"tipo": "enriquecer_email", **body.model_dump()})
     tasks.add_task(_run_enrich, job_id, body.lead_ids, use_foundry)
     return {"job_id": job_id, "total": len(body.lead_ids or db.leads_for_enrichment())}
+
+
+def _agent_cnpj(lead_: dict) -> dict:
+    try:
+        from .foundry_client import find_cnpj
+
+        return find_cnpj(lead_)
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao buscar CNPJ do lead %s", lead_["id"])
+        return {}
+
+
+def _verify_leads(leads_: list[dict], job_id: str | None = None, buscar_cnpj: bool = False) -> tuple[int, int]:
+    ok = 0
+    if buscar_cnpj and config.foundry_enabled():
+        sem_cnpj = [l for l in leads_ if not l["detalhes"].get("cnpj")]
+        if job_id:
+            db.job_progress(job_id, f"Buscando CNPJ de {len(sem_cnpj)} lead(s) com o agente…")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for lead_, found in zip(sem_cnpj, pool.map(_agent_cnpj, sem_cnpj)):
+                lead_["detalhes"].update(found)
+    for i, lead_ in enumerate(leads_, 1):
+        try:
+            data = verify.verify_lead(lead_["detalhes"])
+            db.save_lead_data(lead_["id"], data)
+            origem = data.get("origem_dados") or {}
+            ok += origem.get("cadastro") == "verificado" or origem.get("localizacao") == "verificado"
+        except Exception:  # noqa: BLE001
+            log.exception("Falha ao verificar lead %s", lead_["id"])
+        if job_id:
+            db.job_progress(job_id, f"Verificando CNPJ e rotas… {i}/{len(leads_)} lead(s), {ok} verificado(s).", ok)
+    return ok, len(leads_)
+
+
+def _run_verify(job_id: str, leads_: list[dict], buscar_cnpj: bool) -> None:
+    try:
+        ok, total = _verify_leads(leads_, job_id, buscar_cnpj)
+        db.finish_job(job_id, "concluido", "verificacao", f"{ok} de {total} lead(s) verificados em fontes públicas.", 0, ok)
+    except Exception as exc:  # noqa: BLE001
+        db.finish_job(job_id, "erro", None, f"{type(exc).__name__}: {exc}"[:500])
+
+
+@app.post("/api/verify")
+def verify_leads(body: VerifyIn, tasks: BackgroundTasks, user: str = Depends(current_user)):
+    """Verifica CNPJ (BrasilAPI/ReceitaWS) e rota de carro (Nominatim + OSRM) dos leads reais."""
+    if not verify.enabled():
+        raise HTTPException(400, "Verificação externa desativada (VERIFICACAO_EXTERNA=false)")
+    leads_ = db.leads_for_verification(body.lead_ids or None, only_pending=not body.todos)
+    job_id = uuid.uuid4().hex
+    db.create_job(job_id, {"tipo": "verificar", **body.model_dump()})
+    tasks.add_task(_run_verify, job_id, leads_, body.buscar_cnpj)
+    return {"job_id": job_id, "total": len(leads_)}
 
 
 @app.get("/api/jobs/{job_id}")

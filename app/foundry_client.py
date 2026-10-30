@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import config, emails
+from . import config, emails, verify
 from .config import SERVICES
 
 _openai = None
@@ -37,6 +37,8 @@ def build_prompt(bases: list[str], services: list[str], segment: str | None, qua
     else:
         parts.append("Distribua os leads em pelo menos 3 cidades diferentes dentro desse raio, incluindo cidades fora das bases.")
     parts.append("Para cada empresa informe base_proxima, distancia_km e tempo_viagem_h (estimativas por rodovia).")
+    parts.append("Informe o CNPJ (com cnpj_fonte = URL pública onde ele aparece) somente se encontrá-lo em fonte pública; "
+                 "senão use null.")
     parts.append("Busque no site oficial/página de contato os e-mails corporativos públicos e preencha contatos_email "
                  "com a URL da fonte; nunca invente e-mails.")
     if services:
@@ -81,6 +83,13 @@ def parse_response(text: str, max_hours: float | None = None) -> dict:
             emails.normalize(lead.get("contatos_email") or lead.get("emails") or lead.get("email")), lead.get("site"))
         lead.pop("emails", None)
         lead.pop("email", None)
+        lead["uf"] = (str(lead.get("uf") or "").strip().upper()[:2]) or None
+        cnpj = verify.clean_cnpj(lead.get("cnpj"))
+        if lead.get("cnpj") and not cnpj:
+            lead["cnpj_invalido"] = lead["cnpj"]  # dígitos verificadores não conferem: provável alucinação
+        lead["cnpj"] = verify.fmt_cnpj(cnpj) if cnpj else None
+        if not cnpj:
+            lead.pop("cnpj_fonte", None)
     if max_hours:
         # tolerância de 15 min para as estimativas do modelo
         data["leads"] = [l for l in data["leads"] if l["tempo_viagem_h"] is None or l["tempo_viagem_h"] <= max_hours + 0.25]
@@ -163,3 +172,31 @@ def find_emails(lead: dict) -> dict:
         pass
     status = "ok" if contacts else "nao_encontrado"
     return {"contatos_email": contacts, "email_status": status}
+
+
+def find_cnpj(lead: dict) -> dict:
+    """Pede ao agente o CNPJ (com URL da fonte pública) de um lead existente. Retorna {} se não encontrar."""
+    d = lead.get("detalhes") or lead
+    prompt = (
+        "TAREFA DE ENRIQUECIMENTO (não faça prospecção nova). Pesquise na web o CNPJ da empresa "
+        f"\"{lead.get('empresa')}\" em {lead.get('cidade') or 's/ cidade'}/{d.get('uf') or 'SP'} (site: {d.get('site') or 'desconhecido'}). "
+        "Prefira o CNPJ da unidade nessa cidade; senão, o da matriz. Use fontes públicas (rodapé/política de privacidade do "
+        "site oficial, cnpj.biz, casadosdados, cnpja, econodata, Diário Oficial). Retorne SOMENTE JSON "
+        '{"leads":[{"empresa":"...","cnpj":"00.000.000/0000-00 ou null","cnpj_fonte":"URL onde o CNPJ aparece ou null"}]}. '
+        "Nunca invente nem complete CNPJs; se não encontrar, use null."
+    )
+    response = _get_openai().responses.create(
+        input=prompt,
+        extra_body={"agent_reference": {"name": config.FOUNDRY_AGENT_NAME, "type": "agent_reference"}},
+        timeout=180,
+    )
+    text = response.output_text or ""
+    try:
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.S)
+        data = json.loads(fenced.group(1) if fenced else text[text.find("{"): text.rfind("}") + 1])
+        item = (data.get("leads") or [data])[0] if isinstance(data, dict) else {}
+    except (ValueError, IndexError, AttributeError):
+        return {}
+    cnpj = verify.clean_cnpj(item.get("cnpj"))
+    fonte = item.get("cnpj_fonte") if str(item.get("cnpj_fonte") or "").startswith("http") else None
+    return {"cnpj": verify.fmt_cnpj(cnpj), "cnpj_fonte": fonte} if cnpj else {}

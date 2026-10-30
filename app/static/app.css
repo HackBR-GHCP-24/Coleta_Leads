@@ -172,3 +172,14 @@ a.mail:hover { text-decoration: underline; }
   .facts { grid-template-columns: 1fr; }
   #user-name { display: none; }
 }
+
+/* Origem do dado: verificado em fonte pública x estimado pela IA */
+.vbadge { display: inline-block; font-size: .68rem; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); margin-left: 6px; vertical-align: middle; font-weight: 600; white-space: nowrap; }
+.fact span.vbadge { display: inline-block; font-size: .68rem; margin-left: 4px; }
+.vbadge.ver, .fact span.vbadge.ver { color: var(--ok); border-color: rgba(61,220,151,.4); background: rgba(61,220,151,.08); }
+.vbadge.ia, .fact span.vbadge.ia { color: var(--warm); border-color: rgba(255,181,71,.4); background: rgba(255,181,71,.08); }
+.vbadge.man, .fact span.vbadge.man { color: var(--cold); border-color: rgba(79,195,247,.4); background: rgba(79,195,247,.08); }
+.vbadge.bad { color: #ff6b6b; border-color: rgba(255,107,107,.4); }
+.cad { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: .88rem; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.cad dt { color: var(--muted); }
+.cad dd { margin: 0; }

@@ -31,7 +31,7 @@ flowchart LR
 ## Agente no Foundry
 
 - **Projeto:** `https://foundry-hackbr-ghcp.services.ai.azure.com/api/projects/prj-foundry-HackBR-GHCP-24`
-- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 7 (`prospector-ti-itu-sorocaba-sp:7`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
+- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 8 (`prospector-ti-itu-sorocaba-sp:8`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
 - **Região:** qualquer cidade a até 3,5 h de carro da base mais próxima (Itu, Sorocaba ou São Paulo). O agente informa a cidade
   real, `base_proxima`, `distancia_km` e `tempo_viagem_h` (estimativas por rodovia). O backend descarta leads acima do limite pedido.
 - **Modelo:** deployment `gpt-4o`, o único deployment de chat disponível no projeto.
@@ -45,6 +45,8 @@ flowchart LR
   `encontrado` (publicado na fonte) ou `inferido` (padrão provável, não confirmado — valide antes de usar). O agente não inventa
   e-mails: sem resultado, a lista fica vazia e o lead é marcado como `nao_encontrado`. O backend valida o formato, descarta
   e-mails de outros domínios (agências, fornecedores) e trata e-mail sem fonte como `inferido`.
+- **CNPJ (`cnpj`, `cnpj_fonte`):** o agente só informa o CNPJ quando o encontra em fonte pública e cita a URL. O backend confere
+  os dígitos verificadores e descarta CNPJs inválidos.
 - O agente é instruído a retornar **clientes finais**: exclui MSPs, integradores e revendas de TI, que são concorrentes. Também não
   retorna setores genéricos, e o backend filtra essas entradas por segurança.
 
@@ -74,6 +76,7 @@ Variáveis principais do `.env`, que **não é versionado**:
 | `APP_USERNAME` / `APP_PASSWORD` | Usuário de demonstração. A senha é gravada no banco só como hash PBKDF2-SHA256 |
 | `JWT_SECRET` | Segredo de assinatura dos tokens (`python -c "import secrets;print(secrets.token_urlsafe(48))"`) |
 | `SEED_DEMO_DATA` | Popula o banco com leads fictícios na primeira execução |
+| `VERIFICACAO_EXTERNA` | `true` (padrão) consulta APIs públicas para verificar CNPJ e rota de carro dos leads reais |
 
 A autenticação no Azure usa **Entra ID** (`DefaultAzureCredential`). Nenhuma chave de API é usada nem gravada.
 
@@ -106,6 +109,20 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
   contato (4 em paralelo). No detalhe do lead, **🔎 Buscar com o agente** faz o mesmo para um lead e o campo de e-mail permite
   editar manualmente (vários separados por vírgula; vazio remove). Ao atualizar um lead numa nova coleta, os e-mails já conhecidos
   são mantidos. O banco é migrado automaticamente na inicialização (colunas `email` e `email_tipo`), sem perder os leads.
+- **Dados verificados x estimados pela IA:** cada lead real passa por uma verificação em fontes públicas, e a UI mostra a
+  origem de cada dado com selos **✓ verificado**, **≈ estimado pela IA** ou **✎ manual**:
+  - **Cadastro (CNPJ):** consulta na [BrasilAPI](https://brasilapi.com.br) (dados da Receita Federal), com fallback para a
+    [ReceitaWS](https://receitaws.com.br) (limite de 3 consultas/min). Traz razão social, nome fantasia, CNAE, porte, situação
+    cadastral, endereço e data de abertura. Se o CNPJ for de outra unidade (por exemplo, a matriz), aparece o aviso
+    "endereço em outra cidade".
+  - **Rota:** a cidade do lead é geocodificada no [Nominatim/OpenStreetMap](https://nominatim.org) (1 req/s) e a rota de carro
+    até cada base é calculada no [OSRM](https://project-osrm.org). Vale a base de menor tempo. Distância, tempo e base passam a
+    ser os verificados, e a estimativa original da IA fica visível no detalhe. O tempo do OSRM **não considera trânsito**.
+    Não havia conta Azure Maps acessível na assinatura, por isso foram usados os serviços abertos.
+  - As respostas ficam em cache no SQLite (tabela `api_cache`) para respeitar os limites de uso. A verificação roda
+    automaticamente ao fim de cada coleta real; para os leads sem CNPJ, o agente faz uma busca dedicada e o resultado é conferido
+    na Receita. O botão **✓ Verificar CNPJ e rotas** verifica os leads pendentes. No detalhe do lead, dá para informar o CNPJ
+    manualmente (**Salvar e verificar**) ou **Reverificar**. Leads de demonstração não fazem consultas externas.
 - **Nova coleta:** escolha as bases, o tempo máximo de carro (0,5 a 3,5 h), cidades específicas opcionais (texto livre),
   serviços prioritários, segmento e quantidade. A coleta roda em segundo plano (de 15 a 90 s
   com o Foundry) e os leads repetidos são atualizados (deduplicação por empresa + cidade).
@@ -127,16 +144,19 @@ Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{token}` |
 | GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status`, `min_score`, `q`, `com_email` (true/false) |
-| GET / PATCH | `/api/leads/{id}` | Detalhes / atualização de `status` e/ou `email` manual (`"a@x.com, b@x.com"`; `""` remove) |
+| GET / PATCH | `/api/leads/{id}` | Detalhes / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove) |
 | GET | `/api/stats`, `/api/meta` | KPIs e metadados |
 | POST | `/api/collect` | `{bases, max_horas, cidades, servicos, segmento, quantidade, modo}` → `{job_id}` |
 | POST | `/api/enrich` | `{lead_ids?, modo?}` → `{job_id}`. Busca e-mails via agente (sem `lead_ids`: todos os leads sem e-mail) |
-| GET | `/api/jobs/{id}` | Status da coleta / do enriquecimento |
+| POST | `/api/verify` | `{lead_ids?, todos?, buscar_cnpj?}` → `{job_id}`. Verifica CNPJ e rota (sem `lead_ids`: leads reais pendentes; `todos=true` reverifica todos) |
+| GET | `/api/jobs/{id}` | Status da coleta / do enriquecimento / da verificação |
 
 ## Observações
 
 - Os resultados do agente vêm de pesquisa web e de um modelo de linguagem. **Valide os dados** (CNPJ, sinais e fontes) antes de
   entrar em contato. O campo `nivel_confianca` ajuda a priorizar.
+- **CNPJ e rotas:** os dados cadastrais vêm da Receita Federal, mas a associação empresa ↔ CNPJ é feita pelo agente. Confira
+  a razão social exibida. O tempo de viagem é calculado sem trânsito.
 - **E-mails:** confira a fonte antes do envio, principalmente os `inferido`. Use-os apenas para contato comercial B2B legítimo,
   respeitando a LGPD (base legal de legítimo interesse, opção de descadastro). No modo demo, os e-mails usam o domínio
   reservado `.example` e não existem.

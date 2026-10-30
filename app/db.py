@@ -42,7 +42,17 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS api_cache (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 """
+
+# Campos de verificação (CNPJ/rota) preservados quando o agente atualiza um lead existente
+VERIFIED_KEYS = ("cnpj", "cnpj_fonte", "cnpj_dados", "rota", "origem_dados", "verificado_em", "uf")
 
 STATUSES = ["novo", "contatado", "qualificado", "proposta", "descartado"]
 
@@ -115,7 +125,16 @@ def upsert_leads(leads: list[dict], origem: str) -> tuple[int, int]:
                 continue
             key = _key(empresa, lead.get("cidade"))
             exists = c.execute("SELECT id, data FROM leads WHERE key=?", (key,)).fetchone()
-            old_contacts = json.loads(exists["data"]).get("contatos_email") if exists else None
+            old = json.loads(exists["data"]) if exists else {}
+            old_contacts = old.get("contatos_email")
+            if (old.get("origem_dados") or {}).get("cnpj") == "manual" or (old.get("cnpj") and not lead.get("cnpj")):
+                for k in VERIFIED_KEYS:
+                    if k in old and (k != "uf" or not lead.get("uf")):
+                        lead[k] = old[k]
+                rota = old.get("rota")
+                if rota:  # mantém a rota verificada; o novo valor da IA fica como estimativa
+                    lead["estimativa_ia"] = {k: lead.get(k) for k in ("base_proxima", "distancia_km", "tempo_viagem_h")}
+                    lead["base_proxima"], lead["distancia_km"], lead["tempo_viagem_h"] = rota["base"], rota["distancia_km"], rota["tempo_h"]
             # mantém e-mails já conhecidos (inclusive os informados manualmente) ao atualizar o lead
             contacts = emails.normalize(list(emails.normalize(lead.get("contatos_email"))) + list(old_contacts or []))
             lead["contatos_email"] = contacts
@@ -162,6 +181,38 @@ def set_contacts(lead_id: int, contacts: list[dict], replace: bool = False, stat
     return True
 
 
+def save_lead_data(lead_id: int, data: dict) -> bool:
+    """Regrava o JSON do lead (ex.: após verificação) e recalcula o score."""
+    with conn() as c:
+        cur = c.execute("UPDATE leads SET data=?, score_final=?, updated_at=? WHERE id=?",
+                        (json.dumps(data, ensure_ascii=False), final_score(data), _now(), lead_id))
+    return cur.rowcount > 0
+
+
+def leads_for_verification(ids: list[int] | None = None, only_pending: bool = True) -> list[dict]:
+    with conn() as c:
+        if ids:
+            rows = c.execute(f"SELECT * FROM leads WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM leads WHERE origem != 'demo' ORDER BY score_final DESC").fetchall()
+    leads = [_row_to_lead(r, full=True) for r in rows]
+    if only_pending and not ids:
+        leads = [l for l in leads if not l["detalhes"].get("verificado_em")]
+    return leads
+
+
+def cache_get(kind: str, key: str):
+    with conn() as c:
+        row = c.execute("SELECT value FROM api_cache WHERE kind=? AND key=?", (kind, key)).fetchone()
+    return json.loads(row["value"]) if row else None
+
+
+def cache_set(kind: str, key: str, value) -> None:
+    with conn() as c:
+        c.execute("INSERT OR REPLACE INTO api_cache(kind, key, value, created_at) VALUES (?,?,?,?)",
+                  (kind, key, json.dumps(value, ensure_ascii=False), _now()))
+
+
 def leads_for_enrichment(ids: list[int] | None = None) -> list[dict]:
     with conn() as c:
         if ids:
@@ -193,6 +244,9 @@ def _row_to_lead(row: sqlite3.Row, full: bool = False) -> dict:
         "email": row["email"],
         "email_tipo": row["email_tipo"],
         "email_status": data.get("email_status"),
+        "cnpj": data.get("cnpj"),
+        "origem_dados": data.get("origem_dados") or {},
+        "situacao_cadastral": (data.get("cnpj_dados") or {}).get("situacao"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

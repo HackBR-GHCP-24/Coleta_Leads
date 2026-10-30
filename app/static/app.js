@@ -49,6 +49,7 @@ async function boot() {
   badge.className = `badge ${state.meta.modo}`;
   badge.title = state.meta.agent_id ? `Agent ID: ${state.meta.agent_id}` : "Configure FOUNDRY_AGENT_ID para usar o agente";
   $("#c-mock").checked = state.meta.modo !== "foundry";
+  $("#btn-verify").classList.toggle("hidden", !state.meta.verificacao);
   fillFilters();
   await refresh();
 }
@@ -131,14 +132,22 @@ document.addEventListener("click", async (e) => {
   catch { toast("Não foi possível copiar"); }
 }, true);
 
+const VB = {
+  verificado: ["ver", "✓ verificado"], ia: ["ia", "≈ estimado pela IA"], manual: ["man", "✎ manual"],
+  nao_encontrado: ["bad", "não encontrado na Receita"],
+};
+const vbadge = (k, title = "") => (VB[k] ? `<span class="vbadge ${VB[k][0]}" title="${esc(title)}">${VB[k][1]}</span>` : "");
+const locBadge = (l) => (l.origem === "demo" ? "" : vbadge(l.origem_dados?.localizacao || "ia", l.origem_dados?.localizacao === "verificado" ? "Rota de carro calculada (OSRM/OpenStreetMap, sem trânsito)" : "Distância estimada pelo agente"));
+const cnpjBadge = (l) => (l.cnpj && l.origem_dados?.cadastro === "verificado" ? `<span class="vbadge ver" title="CNPJ ${esc(l.cnpj)} conferido na Receita Federal${l.situacao_cadastral ? ` · ${esc(l.situacao_cadastral)}` : ""}">✓ CNPJ</span>` : "");
+
 function renderLeads(leads) {
   $("#count").textContent = `${leads.length} lead(s)`;
   $("#empty").classList.toggle("hidden", leads.length > 0);
   $("#leads-body").innerHTML = leads.map((l) => `
     <tr data-id="${l.id}">
       <td class="rank">${l.rank}</td>
-      <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}</small>${l.email ? `<small class="m-email">✉ ${emailLink(l.email)}${copyBtn(l.email)}</small>` : ""}</td>
-      <td class="city">${esc(l.cidade)}<small>${esc(locLine(l))}</small></td>
+      <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}${cnpjBadge(l)}</small>${l.email ? `<small class="m-email">✉ ${emailLink(l.email)}${copyBtn(l.email)}</small>` : ""}</td>
+      <td class="city">${esc(l.cidade)}<small>${esc(locLine(l))}${locBadge(l)}</small></td>
       <td class="email hide-sm">${emailCell(l)}</td>
       <td class="hide-sm">${esc(l.segmento)}</td>
       <td class="hide-sm" style="text-transform:capitalize">${esc(l.porte)}</td>
@@ -170,9 +179,16 @@ async function openLead(id) {
       <div class="fact"><span>Score do agente</span><div class="big-score">${l.score_agente}</div></div>
       <div class="fact"><span>Porte</span>${esc(l.porte)}${d.funcionarios_estimados ? ` · ~${esc(d.funcionarios_estimados)} func.` : ""}</div>
       <div class="fact"><span>Confiança</span>${esc(d.nivel_confianca || "—")}</div>
-      <div class="fact"><span>Localização</span>${esc(l.cidade)}/${esc(d.uf || "SP")}<br><small class="muted">${esc(locLine(l))}</small></div>
-      <div class="fact"><span>CNPJ</span>${esc(d.cnpj || "—")}</div>
+      <div class="fact"><span>Localização ${locBadge(l)}</span>${esc(l.cidade)}/${esc(d.uf || "SP")}<br><small class="muted">${esc(locLine(l))}</small>${locIa(d)}</div>
+      <div class="fact"><span>CNPJ ${d.origem_dados?.cadastro === "verificado" ? vbadge("verificado", `Conferido na Receita (${d.cnpj_dados?.fonte || ""}); ${d.origem_dados?.cnpj === "manual" ? "informado manualmente" : "encontrado pelo agente"}`) : vbadge(d.origem_dados?.cnpj, d.origem_dados?.cnpj === "ia" ? "CNPJ informado pelo agente, ainda não conferido" : "CNPJ informado manualmente")}</span>${esc(d.cnpj || "—")}${d.cnpj_fonte && safeUrl(d.cnpj_fonte) ? ` <a class="muted" href="${esc(safeUrl(d.cnpj_fonte))}" target="_blank" rel="noopener">fonte</a>` : ""}</div>
       <div class="fact"><span>Contato sugerido</span>${esc(d.contato_sugerido?.cargo || "—")}<br><small class="muted">${esc(d.contato_sugerido?.canal || "")}</small></div>
+    </div>
+    <h3>Dados cadastrais ${d.origem_dados?.cadastro ? vbadge(d.origem_dados.cadastro) : l.origem === "demo" ? "" : vbadge("ia", "Sem CNPJ verificado: porte e segmento são estimativas da IA")}</h3>
+    ${cadastro(d, l)}
+    <div class="email-edit">
+      <input id="lead-cnpj" type="text" inputmode="numeric" placeholder="CNPJ 00.000.000/0000-00" value="${esc(d.cnpj || "")}" />
+      <button type="button" class="btn ghost small" id="lead-cnpj-save">Salvar e verificar</button>
+      ${state.meta.verificacao && l.origem !== "demo" ? `<button type="button" class="btn ghost small" id="lead-verify">✓ Reverificar${d.cnpj ? "" : " (busca CNPJ com o agente)"}</button>` : ""}
     </div>
     <h3>E-mails de contato</h3>
     ${emailsSection(d.contatos_email, l.email_status)}
@@ -195,6 +211,18 @@ async function openLead(id) {
     await api(`/api/leads/${id}`, { method: "PATCH", body: { status: e.target.value } });
     toast("Status atualizado"); refresh();
   });
+  $("#lead-cnpj-save").addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.innerHTML = `<span class="spinner"></span>Consultando…`;
+    try {
+      await api(`/api/leads/${id}`, { method: "PATCH", body: { cnpj: $("#lead-cnpj").value } });
+      toast("CNPJ salvo"); refresh(); openLead(id);
+    } catch (err) { toast("❌ " + err.message); e.target.disabled = false; e.target.textContent = "Salvar e verificar"; }
+  });
+  $("#lead-verify")?.addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.innerHTML = `<span class="spinner"></span>Verificando…`;
+    const job = await runJob("/api/verify", { lead_ids: [+id] });
+    toast(job.message); refresh(); openLead(id);
+  });
   $("#lead-email-save").addEventListener("click", async () => {
     try {
       await api(`/api/leads/${id}`, { method: "PATCH", body: { email: $("#lead-email").value } });
@@ -209,6 +237,35 @@ async function openLead(id) {
   $("#drawer").classList.remove("hidden");
 }
 
+function locIa(d) {
+  const e = d.estimativa_ia;
+  if (!d.rota || !e || e.tempo_viagem_h == null) return "";
+  return `<br><small class="muted" title="Estimativa original do agente">IA estimou: ${esc(fmtH(e.tempo_viagem_h))}${e.distancia_km ? ` · ${Math.round(e.distancia_km)} km` : ""}${e.base_proxima ? ` de ${esc(e.base_proxima)}` : ""}</small>`;
+}
+
+function cadastro(d, l) {
+  const c = d.cnpj_dados;
+  if (!c) {
+    const msg = d.origem_dados?.cadastro === "nao_encontrado" ? "CNPJ não encontrado na BrasilAPI/ReceitaWS." :
+      d.cnpj_invalido ? `O agente informou um CNPJ inválido (${esc(d.cnpj_invalido)}) — descartado.` :
+      l.origem === "demo" ? "Lead de demonstração (sem consulta externa)." : "Sem CNPJ verificado. Informe o CNPJ ou peça ao agente para buscá-lo.";
+    return `<p class="muted">${msg}</p>`;
+  }
+  const dt = c.abertura ? new Date(c.abertura + "T00:00").toLocaleDateString("pt-BR") : "—";
+  const dif = c.municipio && l.cidade && c.municipio.localeCompare(l.cidade, "pt-BR", { sensitivity: "base" }) !== 0;
+  const row = (k, v) => `<dt>${k}</dt><dd>${v || "—"}</dd>`;
+  return `<dl class="cad">
+    ${row("Razão social", esc(c.razao_social))}${c.nome_fantasia ? row("Nome fantasia", esc(c.nome_fantasia)) : ""}
+    ${row("CNPJ", `${esc(c.cnpj)}${c.matriz_filial ? ` · ${esc(c.matriz_filial)}` : ""}`)}
+    ${row("Situação", `<b style="color:${/ATIVA/i.test(c.situacao || "") ? "var(--ok)" : "#ff6b6b"}">${esc(c.situacao)}</b>`)}
+    ${row("CNAE", `${esc(c.cnae || "")} ${esc(c.cnae_descricao || "")}`)}
+    ${row("Porte (Receita)", esc(c.porte))}
+    ${row("Abertura", dt)}
+    ${row("Endereço", `${esc(c.endereco)} · ${esc(c.municipio)}/${esc(c.uf)}${c.cep ? ` · CEP ${esc(c.cep)}` : ""}${dif ? ` <span class="vbadge ia" title="O CNPJ é de outra unidade (ex.: matriz); a rota usa a cidade do lead">endereço em outra cidade</span>` : ""}`)}
+    ${row("Fonte", `${esc(c.fonte)} · ${c.consultado_em ? new Date(c.consultado_em).toLocaleString("pt-BR") : ""}`)}
+  </dl>`;
+}
+
 function emailsSection(contacts, status) {
   if (!contacts || !contacts.length) {
     return `<p class="muted">${status === "nao_encontrado" ? "Nenhum e-mail público encontrado pelo agente." : "Ainda sem e-mail."} Informe manualmente ou peça ao agente.</p>`;
@@ -219,16 +276,30 @@ function emailsSection(contacts, status) {
   }).join("")}</ul>`;
 }
 
-async function runEnrich(ids = []) {
-  const { job_id } = await api("/api/enrich", { method: "POST", body: { lead_ids: ids } });
+async function runJob(path, body, onProgress) {
+  const { job_id } = await api(path, { method: "POST", body });
   let job;
   do {
     await new Promise((r) => setTimeout(r, 2000));
     job = await api(`/api/jobs/${job_id}`);
-    if (!ids.length && job.message) $("#enrich-status").innerHTML = `<span class="spinner"></span>${esc(job.message)}`;
+    if (onProgress && job.message) onProgress(job.message);
   } while (job.status === "executando");
   return job;
 }
+const runEnrich = (ids = []) => runJob("/api/enrich", { lead_ids: ids },
+  ids.length ? null : (m) => { $("#enrich-status").innerHTML = `<span class="spinner"></span>${esc(m)}`; });
+
+$("#btn-verify").addEventListener("click", async (e) => {
+  const btn = e.currentTarget, st = $("#enrich-status");
+  btn.disabled = true; st.classList.remove("hidden");
+  st.innerHTML = `<span class="spinner"></span>Verificando CNPJ (Receita) e rotas de carro dos leads…`;
+  try {
+    const job = await runJob("/api/verify", { lead_ids: [] }, (m) => { st.innerHTML = `<span class="spinner"></span>${esc(m)}`; });
+    st.textContent = (job.status === "concluido" ? "✅ " : "❌ ") + job.message;
+    refresh();
+  } catch (err) { st.textContent = "❌ " + err.message; }
+  btn.disabled = false;
+});
 
 $("#btn-enrich").addEventListener("click", async (e) => {
   const btn = e.currentTarget, st = $("#enrich-status");
