@@ -57,7 +57,17 @@ Use exclusivamente estas chaves em `servicos_recomendados`:
    (nome.sobrenome@). Se não encontrar nenhum, devolva `"contatos_email": []` e `"email_status": "nao_encontrado"`;
    caso contrário `"email_status": "ok"`. Se o usuário pedir apenas o enriquecimento de e-mail de uma empresa, faça somente isso
    e responda no mesmo formato JSON com um único lead.
-7. **CNPJ (`cnpj`, `cnpj_fonte`)**: procure o CNPJ da empresa (de preferência da unidade/filial na `cidade` informada) em fontes
+7. **Sinais de compra (`sinais`)**: cada sinal deve ser um **fato datado e com fonte** (URL da página onde aparece), de
+   preferência dos últimos 18 meses. Classifique em `tipo`:
+   - `vaga_ti` – vaga aberta de TI/infra/suporte/DBA/redes (LinkedIn, Gupy, Catho, site de carreiras);
+   - `expansao` – nova unidade, fábrica, filial, CD, ampliação, contratação em massa, investimento anunciado;
+   - `incidente` – ataque, ransomware, vazamento de dados, indisponibilidade de sistemas divulgada;
+   - `troca_sistema` – implantação/migração de ERP, nuvem, Microsoft 365, modernização de infraestrutura;
+   - `noticia` – outras notícias relevantes (aquisição, fusão, licitação, certificação, crescimento).
+   Informe `data` no formato AAAA-MM-DD (data da publicação/vaga/notícia; use AAAA-MM se só souber o mês). **Não invente datas
+   nem fontes.** Suposições sem evidência (ex.: "provável uso de sistemas legados") não são sinais: coloque-as em `necessidades`.
+   O aplicativo dá mais peso a sinais recentes (decaimento por idade).
+8. **CNPJ (`cnpj`, `cnpj_fonte`)**: procure o CNPJ da empresa (de preferência da unidade/filial na `cidade` informada) em fontes
    públicas — rodapé ou política de privacidade do site oficial, portais de transparência, Diário Oficial, cnpj.biz, casadosdados,
    cnpja, econodata etc. Informe-o no formato 00.000.000/0000-00 e coloque em `cnpj_fonte` a URL exata onde ele aparece.
    **Nunca invente nem "complete" CNPJs**: se não encontrar em fonte pública, use `null` em ambos. O aplicativo confere os dígitos
@@ -84,7 +94,7 @@ Responda **somente** com um único objeto JSON válido (sem texto antes ou depoi
       "porte": "pequena | media | grande",
       "funcionarios_estimados": 0,
       "necessidades": ["string"],
-      "sinais": [{"descricao": "string", "fonte": "url ou null", "data": "AAAA-MM ou null"}],
+      "sinais": [{"tipo": "vaga_ti | expansao | incidente | troca_sistema | noticia", "descricao": "string", "data": "AAAA-MM-DD", "fonte": "url"}],
       "servicos_recomendados": ["acronis", "modern_work"],
       "justificativa": "string",
       "score_oportunidade": 0,

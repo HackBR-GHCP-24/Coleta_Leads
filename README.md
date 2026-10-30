@@ -31,7 +31,7 @@ flowchart LR
 ## Agente no Foundry
 
 - **Projeto:** `https://foundry-hackbr-ghcp.services.ai.azure.com/api/projects/prj-foundry-HackBR-GHCP-24`
-- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 8 (`prospector-ti-itu-sorocaba-sp:8`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
+- **Agente:** `prospector-ti-itu-sorocaba-sp`, versão 9 (`prospector-ti-itu-sorocaba-sp:9`). A versão atual está em [`agent/agent_info.json`](agent/agent_info.json).
 - **Região:** qualquer cidade a até 3,5 h de carro da base mais próxima (Itu, Sorocaba ou São Paulo). O agente informa a cidade
   real, `base_proxima`, `distancia_km` e `tempo_viagem_h` (estimativas por rodovia). O backend descarta leads acima do limite pedido.
 - **Modelo:** deployment `gpt-4o`, o único deployment de chat disponível no projeto.
@@ -123,6 +123,13 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
     automaticamente ao fim de cada coleta real; para os leads sem CNPJ, o agente faz uma busca dedicada e o resultado é conferido
     na Receita. O botão **✓ Verificar CNPJ e rotas** verifica os leads pendentes. No detalhe do lead, dá para informar o CNPJ
     manualmente (**Salvar e verificar**) ou **Reverificar**. Leads de demonstração não fazem consultas externas.
+- **Sinais de compra:** o agente busca sinais **datados e com URL da fonte** de cada empresa: vagas de TI, expansão ou nova
+  unidade, incidentes de segurança, troca de sistemas/migração e notícias. Os sinais ficam na tabela `sinais` (tipo, descrição,
+  data, fonte, peso) e aparecem numa **timeline** no detalhe do lead (ícone do tipo, data, "há X dias", peso efetivo e link da
+  fonte). O ranking mostra quantos sinais com fonte cada lead tem e a idade do último. Após cada coleta real, o agente faz uma
+  busca dedicada de sinais para os leads que ainda não têm sinal datado com fonte. O botão **📡 Buscar sinais** faz o mesmo sob
+  demanda, e o detalhe tem **Buscar sinais recentes com o agente** para um lead. Na migração, os sinais antigos (texto) são
+  copiados para a tabela; os sem data e sem fonte viram *indício* (peso baixo).
 - **Nova coleta:** escolha as bases, o tempo máximo de carro (0,5 a 3,5 h), cidades específicas opcionais (texto livre),
   serviços prioritários, segmento e quantidade. A coleta roda em segundo plano (de 15 a 90 s
   com o Foundry) e os leads repetidos são atualizados (deduplicação por empresa + cidade).
@@ -136,6 +143,11 @@ Abra <http://localhost:8000> e entre com o usuário e a senha definidos no `.env
 O score heurístico combina aderência ao portfólio (35%), força dos sinais (25%), porte (20%), proximidade (10%: 100% na base,
 caindo linearmente até 30% com 3,5 h de carro) e nível de confiança (10%). Faixas: **quente** ≥ 75, **morno** ≥ 55, **frio** < 55.
 
+**Força dos sinais** (0–1) = Σ(peso do tipo × fator) ÷ 1,2, limitada a 1. Pesos por tipo: expansão 1,0; incidente 1,0; troca de
+sistemas 0,9; vaga de TI 0,8; notícia 0,6; indício sem evidência 0,3. O fator decai com a idade (meia-vida de 180 dias:
+`0,5 ^ (idade em dias / 180)`, mínimo 0,05). Sinais sem data valem 0,35, e sinais sem URL de fonte valem metade. Assim,
+sinais recentes e comprovados pesam mais, e os scores são recalculados a cada inicialização.
+
 ## API
 
 Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
@@ -144,11 +156,12 @@ Todas as rotas, exceto o login, exigem `Authorization: Bearer <token>`.
 |---|---|---|
 | POST | `/api/auth/login` | `{username, password}` → `{token}` |
 | GET | `/api/leads` | Ranking. Filtros: `cidade`, `base`, `max_horas`, `servico`, `status`, `min_score`, `q`, `com_email` (true/false) |
-| GET / PATCH | `/api/leads/{id}` | Detalhes / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove) |
+| GET / PATCH | `/api/leads/{id}` | Detalhes (inclui `sinais` com `peso_efetivo` e `forca_sinais`) / atualização de `status`, `email` manual (`"a@x.com, b@x.com"`; `""` remove) e/ou `cnpj` manual (verificado na hora; `""` remove) |
 | GET | `/api/stats`, `/api/meta` | KPIs e metadados |
 | POST | `/api/collect` | `{bases, max_horas, cidades, servicos, segmento, quantidade, modo}` → `{job_id}` |
 | POST | `/api/enrich` | `{lead_ids?, modo?}` → `{job_id}`. Busca e-mails via agente (sem `lead_ids`: todos os leads sem e-mail) |
 | POST | `/api/verify` | `{lead_ids?, todos?, buscar_cnpj?}` → `{job_id}`. Verifica CNPJ e rota (sem `lead_ids`: leads reais pendentes; `todos=true` reverifica todos) |
+| POST | `/api/signals` | `{lead_ids?, modo?}` → `{job_id}`. Busca sinais de compra datados via agente (sem `lead_ids`: leads reais sem sinal datado com fonte) |
 | GET | `/api/jobs/{id}` | Status da coleta / do enriquecimento / da verificação |
 
 ## Observações

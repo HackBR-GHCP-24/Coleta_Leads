@@ -1,10 +1,12 @@
 """Cálculo do ranking de oportunidades.
 
 score_final = 60% score do agente + 40% score heurístico (aderência, porte, sinais, proximidade e confiança).
+Os sinais de compra pesam conforme o tipo e a idade (ver app/sinais.py).
 A proximidade usa o tempo estimado de carro até a base mais próxima (Itu, Sorocaba ou São Paulo).
 """
 from __future__ import annotations
 
+from . import sinais as sinais_mod
 from .config import SERVICES
 
 _PORTE = {"grande": 1.0, "media": 0.8, "média": 0.8, "pequena": 0.5}
@@ -28,23 +30,24 @@ def proximity(lead: dict) -> float:
     return 0.5 if h is None else max(0.3, 1.0 - 0.2 * h)
 
 
-def heuristic_score(lead: dict) -> float:
+def heuristic_score(lead: dict, sinais: list[dict] | None = None) -> float:
     services = [s for s in lead.get("servicos_recomendados") or [] if s in SERVICES]
     aderencia = min(len(services) / 4, 1.0)
     porte = _PORTE.get(str(lead.get("porte", "")).lower(), 0.6)
-    sinais = min(len(lead.get("sinais") or []) / 3, 1.0)
+    # força dos sinais de compra com decaimento por idade (sinais recentes pesam mais)
+    sinais = sinais_mod.strength(sinais if sinais is not None else sinais_mod.normalize(lead.get("sinais")))
     cidade = proximity(lead)
     confianca = _CONFIANCA.get(str(lead.get("nivel_confianca", "")).lower(), 0.6)
     return 100 * (0.35 * aderencia + 0.2 * porte + 0.25 * sinais + 0.1 * cidade + 0.1 * confianca)
 
 
-def final_score(lead: dict) -> int:
+def final_score(lead: dict, sinais: list[dict] | None = None) -> int:
     try:
         agent = float(lead.get("score_oportunidade") or 0)
     except (TypeError, ValueError):
         agent = 0.0
     agent = max(0.0, min(agent, 100.0))
-    return round(0.6 * agent + 0.4 * heuristic_score(lead))
+    return round(0.6 * agent + 0.4 * heuristic_score(lead, sinais))
 
 
 def tier(score: int) -> str:

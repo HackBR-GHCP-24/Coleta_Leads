@@ -6,7 +6,7 @@ import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from . import config, emails
+from . import config, emails, sinais as sinais_mod
 from .auth import hash_password, verify_password
 from .scoring import final_score, tier, travel_hours
 
@@ -42,6 +42,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS sinais (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    tipo TEXT NOT NULL,
+    descricao TEXT NOT NULL,
+    data TEXT,
+    fonte TEXT,
+    peso REAL NOT NULL,
+    chave TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (lead_id, chave)
+);
+CREATE INDEX IF NOT EXISTS ix_sinais_lead ON sinais(lead_id);
 CREATE TABLE IF NOT EXISTS api_cache (
     kind TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -77,6 +90,7 @@ def init_db() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
         _migrate(c)
+        _recompute(c)  # o decaimento dos sinais muda com o tempo
         if config.APP_PASSWORD:
             row = c.execute("SELECT password_hash FROM users WHERE username=?", (config.APP_USERNAME,)).fetchone()
             if not row or not verify_password(config.APP_PASSWORD, row["password_hash"]):
@@ -101,6 +115,56 @@ def _migrate(c: sqlite3.Connection) -> None:
             email, tipo = emails.primary(contacts)
             c.execute("UPDATE leads SET email=?, email_tipo=?, data=? WHERE id=?",
                       (email, tipo, json.dumps(data, ensure_ascii=False), row["id"]))
+    # sinais de compra: migra os sinais guardados no JSON para a tabela própria
+    for row in c.execute("SELECT id, data FROM leads WHERE id NOT IN (SELECT DISTINCT lead_id FROM sinais)").fetchall():
+        _save_signals(c, row["id"], json.loads(row["data"]).get("sinais"))
+
+
+def _signal_key(descricao: str) -> str:
+    return _key(descricao[:120], None)
+
+
+def _save_signals(c: sqlite3.Connection, lead_id: int, items) -> int:
+    n = 0
+    for s in sinais_mod.normalize(items):
+        cur = c.execute(
+            """INSERT INTO sinais(lead_id, tipo, descricao, data, fonte, peso, chave, created_at) VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(lead_id, chave) DO UPDATE SET
+                 data=COALESCE(excluded.data, sinais.data), fonte=COALESCE(excluded.fonte, sinais.fonte),
+                 tipo=CASE WHEN excluded.tipo != 'inferencia' THEN excluded.tipo ELSE sinais.tipo END,
+                 peso=CASE WHEN excluded.tipo != 'inferencia' THEN excluded.peso ELSE sinais.peso END""",
+            (lead_id, s["tipo"], s["descricao"], s["data"], s["fonte"], s["peso"], _signal_key(s["descricao"]), _now()),
+        )
+        n += cur.rowcount
+    return n
+
+
+def _signals(c: sqlite3.Connection, lead_id: int) -> list[dict]:
+    rows = c.execute("SELECT id, tipo, descricao, data, fonte, peso FROM sinais WHERE lead_id=?", (lead_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _rescore(c: sqlite3.Connection, lead_id: int, data: dict) -> int:
+    score = final_score(data, _signals(c, lead_id))
+    c.execute("UPDATE leads SET score_final=? WHERE id=?", (score, lead_id))
+    return score
+
+
+def _recompute(c: sqlite3.Connection) -> None:
+    for row in c.execute("SELECT id, data FROM leads").fetchall():
+        _rescore(c, row["id"], json.loads(row["data"]))
+
+
+def add_signals(lead_id: int, items) -> int:
+    """Acrescenta sinais (ex.: busca dedicada do agente) e recalcula o score. Devolve quantos foram gravados."""
+    with conn() as c:
+        row = c.execute("SELECT data FROM leads WHERE id=?", (lead_id,)).fetchone()
+        if not row:
+            return 0
+        n = _save_signals(c, lead_id, items)
+        _rescore(c, lead_id, json.loads(row["data"]))
+        c.execute("UPDATE leads SET updated_at=? WHERE id=?", (_now(), lead_id))
+    return n
 
 
 def check_login(username: str, password: str) -> bool:
@@ -155,13 +219,16 @@ def upsert_leads(leads: list[dict], origem: str) -> tuple[int, int]:
                     (*values, exists["id"]),
                 )
                 atualizados += 1
+                lead_id = exists["id"]
             else:
-                c.execute(
+                lead_id = c.execute(
                     """INSERT INTO leads(empresa, cidade, segmento, porte, score_agente, score_final, servicos, data,
                        origem, updated_at, email, email_tipo, key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*values, key, now),
-                )
+                ).lastrowid
                 novos += 1
+            _save_signals(c, lead_id, lead.get("sinais"))
+            _rescore(c, lead_id, lead)
     return novos, atualizados
 
 
@@ -184,8 +251,10 @@ def set_contacts(lead_id: int, contacts: list[dict], replace: bool = False, stat
 def save_lead_data(lead_id: int, data: dict) -> bool:
     """Regrava o JSON do lead (ex.: após verificação) e recalcula o score."""
     with conn() as c:
-        cur = c.execute("UPDATE leads SET data=?, score_final=?, updated_at=? WHERE id=?",
-                        (json.dumps(data, ensure_ascii=False), final_score(data), _now(), lead_id))
+        cur = c.execute("UPDATE leads SET data=?, updated_at=? WHERE id=?",
+                        (json.dumps(data, ensure_ascii=False), _now(), lead_id))
+        if cur.rowcount:
+            _rescore(c, lead_id, data)
     return cur.rowcount > 0
 
 
@@ -199,6 +268,17 @@ def leads_for_verification(ids: list[int] | None = None, only_pending: bool = Tr
     if only_pending and not ids:
         leads = [l for l in leads if not l["detalhes"].get("verificado_em")]
     return leads
+
+
+def leads_for_signals(ids: list[int] | None = None) -> list[dict]:
+    with conn() as c:
+        if ids:
+            rows = c.execute(f"SELECT * FROM leads WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        else:
+            rows = c.execute("""SELECT * FROM leads WHERE origem != 'demo' AND id NOT IN
+                                (SELECT lead_id FROM sinais WHERE data IS NOT NULL AND fonte IS NOT NULL)
+                                ORDER BY score_final DESC""").fetchall()
+    return [_row_to_lead(r, full=True) for r in rows]
 
 
 def cache_get(kind: str, key: str):
@@ -278,7 +358,11 @@ def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None, base
     sql += " ORDER BY score_final DESC, updated_at DESC"
     with conn() as c:
         rows = c.execute(sql, args).fetchall()
+        resumo = {r[0]: (r[1], r[2]) for r in c.execute(
+            "SELECT lead_id, MAX(data), SUM(data IS NOT NULL AND fonte IS NOT NULL) FROM sinais GROUP BY lead_id")}
     leads = [_row_to_lead(r) for r in rows]
+    for l in leads:
+        l["ultimo_sinal"], l["sinais_datados"] = resumo.get(l["id"], (None, 0))
     if base:
         leads = [l for l in leads if l["base_proxima"] == base]
     if max_horas is not None:
@@ -291,7 +375,13 @@ def list_leads(cidade=None, servico=None, min_score=0, status=None, q=None, base
 def get_lead(lead_id: int) -> dict | None:
     with conn() as c:
         row = c.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
-    return _row_to_lead(row, full=True) if row else None
+        sinais = _signals(c, lead_id) if row else []
+    if not row:
+        return None
+    out = _row_to_lead(row, full=True)
+    out["sinais"] = sinais_mod.enrich(sinais)
+    out["forca_sinais"] = round(sinais_mod.strength(sinais), 3)
+    return out
 
 
 def set_status(lead_id: int, status: str) -> bool:

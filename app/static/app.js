@@ -50,6 +50,7 @@ async function boot() {
   badge.title = state.meta.agent_id ? `Agent ID: ${state.meta.agent_id}` : "Configure FOUNDRY_AGENT_ID para usar o agente";
   $("#c-mock").checked = state.meta.modo !== "foundry";
   $("#btn-verify").classList.toggle("hidden", !state.meta.verificacao);
+  $("#btn-signals").classList.toggle("hidden", state.meta.modo !== "foundry");
   fillFilters();
   await refresh();
 }
@@ -146,7 +147,7 @@ function renderLeads(leads) {
   $("#leads-body").innerHTML = leads.map((l) => `
     <tr data-id="${l.id}">
       <td class="rank">${l.rank}</td>
-      <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}${cnpjBadge(l)}</small>${l.email ? `<small class="m-email">✉ ${emailLink(l.email)}${copyBtn(l.email)}</small>` : ""}</td>
+      <td class="company">${esc(l.empresa)}<small>${l.origem === "foundry" ? "🔎 Foundry" : "🧪 Demo"} · confiança ${esc(l.nivel_confianca || "—")}${cnpjBadge(l)}</small>${l.sinais_datados ? `<small class="muted" title="Sinais de compra datados com fonte">📡 ${l.sinais_datados} sinal(is) · último ${idade(l.ultimo_sinal)}</small>` : ""}${l.email ? `<small class="m-email">✉ ${emailLink(l.email)}${copyBtn(l.email)}</small>` : ""}</td>
       <td class="city">${esc(l.cidade)}<small>${esc(locLine(l))}${locBadge(l)}</small></td>
       <td class="email hide-sm">${emailCell(l)}</td>
       <td class="hide-sm">${esc(l.segmento)}</td>
@@ -168,7 +169,6 @@ async function openLead(id) {
   const d = l.detalhes;
   const site = safeUrl(d.site);
   const list = (arr, fn = esc) => (arr && arr.length ? `<ul>${arr.map((x) => `<li>${fn(x)}</li>`).join("")}</ul>` : `<p class="muted">—</p>`);
-  const sinal = (s) => { const u = safeUrl(s.fonte); return `${esc(s.descricao)}${s.data ? ` <span class="muted">(${esc(s.data)})</span>` : ""}${u ? ` — <a href="${esc(u)}" target="_blank" rel="noopener">fonte</a>` : ""}`; };
   const fonte = (u) => (safeUrl(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>` : esc(u));
   $("#drawer-content").innerHTML = `
     <span class="pill ${l.tier}">${l.tier}</span>
@@ -203,7 +203,9 @@ async function openLead(id) {
     <div class="tags">${l.servicos.map((s) => `<span class="tag">${esc(state.meta.servicos[s] || s)}</span>`).join("") || "—"}</div>
     <h3>Justificativa</h3><p>${esc(d.justificativa)}</p>
     <h3>Necessidades identificadas</h3>${list(d.necessidades)}
-    <h3>Sinais</h3>${list(d.sinais, sinal)}
+    <h3>Sinais de compra <span class="muted small-note">força ${Math.round((l.forca_sinais || 0) * 100)}%</span></h3>
+    ${timeline(l.sinais)}
+    ${l.origem !== "demo" && state.meta.modo === "foundry" ? `<button type="button" class="btn ghost small" id="lead-signals">📡 Buscar sinais recentes com o agente</button>` : ""}
     <h3>Fontes</h3>${list(d.fontes, fonte)}
     ${d.observacao ? `<p class="muted">${esc(d.observacao)}</p>` : ""}
     <p class="muted"><small>Origem: ${esc(l.origem)} · atualizado em ${new Date(l.updated_at).toLocaleString("pt-BR")}</small></p>`;
@@ -223,6 +225,11 @@ async function openLead(id) {
     const job = await runJob("/api/verify", { lead_ids: [+id] });
     toast(job.message); refresh(); openLead(id);
   });
+  $("#lead-signals")?.addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.innerHTML = `<span class="spinner"></span>Pesquisando sinais…`;
+    const job = await runJob("/api/signals", { lead_ids: [+id] });
+    toast(job.message); refresh(); openLead(id);
+  });
   $("#lead-email-save").addEventListener("click", async () => {
     try {
       await api(`/api/leads/${id}`, { method: "PATCH", body: { email: $("#lead-email").value } });
@@ -235,6 +242,31 @@ async function openLead(id) {
     toast(job.message); refresh(); openLead(id);
   });
   $("#drawer").classList.remove("hidden");
+}
+
+const SINAL_ICON = { vaga_ti: "💼", expansao: "🏗️", incidente: "🚨", troca_sistema: "🔄", noticia: "📰", inferencia: "💭" };
+function idade(iso) {
+  const dias = Math.round((Date.now() - new Date(iso + "T00:00")) / 864e5);
+  if (dias < 1) return "hoje";
+  if (dias < 31) return `há ${dias} dia(s)`;
+  if (dias < 365) return `há ${Math.round(dias / 30)} mês(es)`;
+  return `há ${(dias / 365).toFixed(1).replace(".", ",")} ano(s)`;
+}
+function timeline(sinais) {
+  if (!sinais || !sinais.length) return `<p class="muted">Nenhum sinal registrado.</p>`;
+  return `<ol class="timeline">${sinais.map((s) => {
+    const u = safeUrl(s.fonte);
+    const pct = Math.round(s.peso_efetivo * 100);
+    return `<li class="tl-${esc(s.tipo)}">
+      <span class="tl-dot">${SINAL_ICON[s.tipo] || "•"}</span>
+      <div class="tl-body">
+        <div class="tl-head"><b>${esc(s.tipo_label)}</b>
+          <span class="muted">${s.data ? `${new Date(s.data + "T00:00").toLocaleDateString("pt-BR")} · ${idade(s.data)}` : "sem data"}</span>
+          <span class="tl-peso" title="Peso do tipo ${s.peso} × fator idade/fonte ${s.decaimento}">peso ${pct}%</span></div>
+        <div>${esc(s.descricao)}</div>
+        ${u ? `<a class="muted src" href="${esc(u)}" target="_blank" rel="noopener" title="${esc(u)}">${esc(new URL(u).hostname)}</a>` : `<small class="muted">sem fonte</small>`}
+      </div></li>`;
+  }).join("")}</ol>`;
 }
 
 function locIa(d) {
@@ -289,6 +321,17 @@ async function runJob(path, body, onProgress) {
 const runEnrich = (ids = []) => runJob("/api/enrich", { lead_ids: ids },
   ids.length ? null : (m) => { $("#enrich-status").innerHTML = `<span class="spinner"></span>${esc(m)}`; });
 
+$("#btn-signals").addEventListener("click", async (e) => {
+  const btn = e.currentTarget, st = $("#enrich-status");
+  btn.disabled = true; st.classList.remove("hidden");
+  st.innerHTML = `<span class="spinner"></span>Agente buscando sinais de compra datados…`;
+  try {
+    const job = await runJob("/api/signals", { lead_ids: [] }, (m) => { st.innerHTML = `<span class="spinner"></span>${esc(m)}`; });
+    st.textContent = (job.status === "concluido" ? "✅ " : "❌ ") + job.message;
+    refresh();
+  } catch (err) { st.textContent = "❌ " + err.message; }
+  btn.disabled = false;
+});
 $("#btn-verify").addEventListener("click", async (e) => {
   const btn = e.currentTarget, st = $("#enrich-status");
   btn.disabled = true; st.classList.remove("hidden");

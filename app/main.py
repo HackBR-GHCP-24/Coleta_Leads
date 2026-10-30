@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, emails, mock_data, verify
+from . import config, db, emails, mock_data, sinais as sinais_mod, verify
 from .auth import create_token, current_user
 
 log = logging.getLogger("coleta_leads")
@@ -83,6 +83,7 @@ def meta(user: str = Depends(current_user)):
         "modo": "foundry" if config.foundry_enabled() else "mock",
         "agent_id": config.FOUNDRY_AGENT_ID or None,
         "verificacao": verify.enabled(),
+        "tipos_sinal": {k: v[0] for k, v in sinais_mod.TIPOS.items()},
     }
 
 
@@ -166,6 +167,21 @@ def _run_collect(job_id: str, body: CollectIn) -> None:
             db.job_progress(job_id, msg + " Verificando CNPJ e rotas…", atualizados)
             ok, total = _verify_leads(db.leads_for_verification(), buscar_cnpj=True)
             msg += f" Verificados: {ok}/{total} lead(s) (CNPJ e/ou rota)."
+        if origem == "foundry":
+            pend = db.leads_for_signals()
+            db.job_progress(job_id, msg + f" Buscando sinais de compra com fonte de {len(pend)} lead(s)…", atualizados)
+            from .foundry_client import find_signals
+
+            def work(lead_: dict) -> int:
+                try:
+                    return db.add_signals(lead_["id"], find_signals(lead_))
+                except Exception:  # noqa: BLE001
+                    log.exception("Falha ao buscar sinais do lead %s", lead_["id"])
+                    return 0
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                n = sum(pool.map(work, pend))
+            msg += f" Sinais com fonte: {n} novo(s)."
         db.finish_job(job_id, "concluido", origem, msg, novos, atualizados)
     except Exception as exc:  # noqa: BLE001
         db.finish_job(job_id, "erro", None, f"{type(exc).__name__}: {exc}"[:500])
@@ -280,6 +296,47 @@ def verify_leads(body: VerifyIn, tasks: BackgroundTasks, user: str = Depends(cur
     job_id = uuid.uuid4().hex
     db.create_job(job_id, {"tipo": "verificar", **body.model_dump()})
     tasks.add_task(_run_verify, job_id, leads_, body.buscar_cnpj)
+    return {"job_id": job_id, "total": len(leads_)}
+
+
+def _mock_signals(lead_: dict) -> list[dict]:
+    return []  # modo demo: os sinais fictícios já vêm na coleta
+
+
+def _run_signals(job_id: str, leads_: list[dict], use_foundry: bool) -> None:
+    feitos = novos = 0
+    try:
+        find = _mock_signals
+        if use_foundry:
+            from .foundry_client import find_signals as find
+
+        def work(lead_: dict) -> int:
+            try:
+                return db.add_signals(lead_["id"], find(lead_))
+            except Exception:  # noqa: BLE001
+                log.exception("Falha ao buscar sinais do lead %s", lead_["id"])
+                return 0
+
+        db.job_progress(job_id, f"Buscando sinais de {len(leads_)} lead(s)…")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for n in pool.map(work, leads_):
+                feitos += 1
+                novos += n
+                db.job_progress(job_id, f"Buscando sinais… {feitos}/{len(leads_)} lead(s), {novos} sinal(is) datado(s).", novos)
+        db.finish_job(job_id, "concluido", "foundry" if use_foundry else "demo",
+                      f"{novos} sinal(is) datado(s) gravados para {len(leads_)} lead(s).", 0, novos)
+    except Exception as exc:  # noqa: BLE001
+        db.finish_job(job_id, "erro", None, f"{type(exc).__name__}: {exc}"[:500])
+
+
+@app.post("/api/signals")
+def signals(body: EnrichIn, tasks: BackgroundTasks, user: str = Depends(current_user)):
+    """Busca (via agente) sinais de compra datados dos leads informados (vazio = leads reais sem sinal datado)."""
+    use_foundry = body.modo != "mock" and config.foundry_enabled()
+    leads_ = db.leads_for_signals(body.lead_ids or None)
+    job_id = uuid.uuid4().hex
+    db.create_job(job_id, {"tipo": "sinais", **body.model_dump()})
+    tasks.add_task(_run_signals, job_id, leads_, use_foundry)
     return {"job_id": job_id, "total": len(leads_)}
 
 

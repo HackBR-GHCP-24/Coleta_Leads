@@ -37,6 +37,8 @@ def build_prompt(bases: list[str], services: list[str], segment: str | None, qua
     else:
         parts.append("Distribua os leads em pelo menos 3 cidades diferentes dentro desse raio, incluindo cidades fora das bases.")
     parts.append("Para cada empresa informe base_proxima, distancia_km e tempo_viagem_h (estimativas por rodovia).")
+    parts.append("Em sinais, traga só fatos datados (AAAA-MM-DD) com URL da fonte e tipo (vaga_ti, expansao, incidente, "
+                 "troca_sistema, noticia), priorizando os últimos 18 meses.")
     parts.append("Informe o CNPJ (com cnpj_fonte = URL pública onde ele aparece) somente se encontrá-lo em fonte pública; "
                  "senão use null.")
     parts.append("Busque no site oficial/página de contato os e-mails corporativos públicos e preencha contatos_email "
@@ -200,3 +202,31 @@ def find_cnpj(lead: dict) -> dict:
     cnpj = verify.clean_cnpj(item.get("cnpj"))
     fonte = item.get("cnpj_fonte") if str(item.get("cnpj_fonte") or "").startswith("http") else None
     return {"cnpj": verify.fmt_cnpj(cnpj), "cnpj_fonte": fonte} if cnpj else {}
+
+
+def find_signals(lead: dict) -> list[dict]:
+    """Pede ao agente sinais de compra recentes, datados e com fonte, de um lead existente."""
+    d = lead.get("detalhes") or lead
+    prompt = (
+        "TAREFA DE ENRIQUECIMENTO (não faça prospecção nova). Pesquise na web sinais de compra de TI recentes (últimos 18 "
+        f"meses) da empresa \"{lead.get('empresa')}\" em {lead.get('cidade') or 's/ cidade'}/{d.get('uf') or 'SP'} "
+        f"(site: {d.get('site') or 'desconhecido'}): vagas de TI/infra/suporte, expansão ou nova unidade, incidentes de "
+        "segurança/indisponibilidade, troca de sistemas (ERP, nuvem, Microsoft 365) e notícias relevantes. Retorne SOMENTE JSON "
+        '{"leads":[{"empresa":"...","sinais":[{"tipo":"vaga_ti|expansao|incidente|troca_sistema|noticia",'
+        '"descricao":"fato objetivo","data":"AAAA-MM-DD","fonte":"URL da página"}]}]}. '
+        "Inclua apenas fatos com data e URL reais; nunca invente. Se não achar nada, devolva sinais vazio."
+    )
+    response = _get_openai().responses.create(
+        input=prompt,
+        extra_body={"agent_reference": {"name": config.FOUNDRY_AGENT_NAME, "type": "agent_reference"}},
+        timeout=180,
+    )
+    text = response.output_text or ""
+    try:
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.S)
+        data = json.loads(fenced.group(1) if fenced else text[text.find("{"): text.rfind("}") + 1])
+        item = (data.get("leads") or [data])[0] if isinstance(data, dict) else {}
+    except (ValueError, IndexError, AttributeError):
+        return []
+    return [s for s in item.get("sinais") or [] if isinstance(s, dict) and s.get("data") and
+            str(s.get("fonte") or "").startswith("http")]

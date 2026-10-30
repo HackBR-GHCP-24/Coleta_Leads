@@ -183,3 +183,16 @@ a.mail:hover { text-decoration: underline; }
 .cad { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: .88rem; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .cad dt { color: var(--muted); }
 .cad dd { margin: 0; }
+
+/* Timeline de sinais de compra */
+.small-note { font-size: .72rem; text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 6px; }
+.timeline { list-style: none; margin: 8px 0 12px; padding: 0 0 0 4px; position: relative; }
+.timeline::before { content: ""; position: absolute; left: 17px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+.timeline li { display: flex; gap: 12px; padding: 6px 0; position: relative; }
+.tl-dot { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--card); border: 1px solid var(--line); display: grid; place-items: center; font-size: .85rem; z-index: 1; }
+.tl-body { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: .88rem; min-width: 0; }
+.tl-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 2px; }
+.tl-peso { margin-left: auto; font-size: .7rem; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.tl-incidente .tl-dot, .tl-expansao .tl-dot { border-color: rgba(255,107,107,.5); }
+.tl-inferencia .tl-body { opacity: .7; border-style: dashed; }
+.tl-body .src { display: inline-block; margin-top: 4px; font-size: .78rem; }

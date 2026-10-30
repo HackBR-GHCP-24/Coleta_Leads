@@ -4,6 +4,7 @@ from __future__ import annotations
 import random
 import re
 import unicodedata
+from datetime import date, timedelta
 
 from .config import BASES, SERVICES
 
@@ -43,6 +44,12 @@ _SINAIS = [
     ("Reforma do escritório e novo layout de rede", ["infra_cabeada"]),
     ("Crescimento de 30% no quadro de funcionários", ["modern_work", "residentes"]),
 ]
+_TIPO_SINAL = {
+    "Vaga aberta para Analista de Suporte N1/N2": "vaga_ti", "Vaga para DBA SQL Server temporário": "vaga_ti",
+    "Anúncio de nova unidade fabril na região": "expansao", "Expansão de filiais com necessidade de VPN/SD-WAN": "expansao",
+    "Notícia de incidente de ransomware no setor": "incidente", "Migração planejada para Microsoft 365": "troca_sistema",
+    "Servidores Windows Server 2012 fora de suporte": "troca_sistema", "Crescimento de 30% no quadro de funcionários": "noticia",
+}
 _NECESSIDADES = {
     "acronis": "Backup e recuperação de desastres com proteção contra ransomware",
     "servicos_gerenciados": "Monitoramento 24x7 e gestão de TI com SLA",
@@ -89,7 +96,8 @@ def _lead(rng: random.Random, cidade: str | None = None, servicos_foco: list[str
         "porte": porte,
         "funcionarios_estimados": funcs,
         "necessidades": [_NECESSIDADES[s] for s in servicos],
-        "sinais": [{"descricao": d, "fonte": None, "data": None} for d, _ in sinais],
+        "sinais": [{"descricao": d, "fonte": None, "tipo": _TIPO_SINAL.get(d, "noticia"),
+                    "data": (date.today() - timedelta(days=rng.randint(5, 420))).isoformat()} for d, _ in sinais],
         "servicos_recomendados": servicos,
         "justificativa": (
             f"Empresa de porte {porte} do segmento {seg.lower()} em {cidade}, com sinais de "
